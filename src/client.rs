@@ -80,7 +80,7 @@ impl ErebyxClient {
             anyhow::bail!(
                 "Server returned HTTP {}: {}",
                 status.as_u16(),
-                truncate(&response_text, 500)
+                truncate_safe(&response_text, 500)
             );
         }
 
@@ -161,7 +161,7 @@ impl ErebyxClient {
             anyhow::bail!(
                 "Health check failed with HTTP {}: {}",
                 status.as_u16(),
-                truncate(&response_text, 500)
+                truncate_safe(&response_text, 500)
             );
         }
 
@@ -169,10 +169,15 @@ impl ErebyxClient {
     }
 }
 
-fn truncate(s: &str, max_len: usize) -> &str {
+/// Truncate a string to at most `max_len` bytes, respecting UTF-8 char boundaries.
+/// Never panics on multi-byte characters (emoji, CJK, etc.).
+fn truncate_safe(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
-        s
-    } else {
-        &s[..max_len]
+        return s;
     }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }

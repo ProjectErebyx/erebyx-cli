@@ -1,6 +1,7 @@
 mod cli;
 mod client;
 mod output;
+mod setup;
 
 use anyhow::Result;
 use clap::Parser;
@@ -28,6 +29,41 @@ async fn run(cli: Cli) -> Result<()> {
             let client = ErebyxClient::new()?;
             let result = client.health().await?;
             print_response(&result, false, json_mode);
+        }
+
+        Commands::Setup { api_key, api_url } => {
+            setup::run_setup(api_key, api_url).await?;
+        }
+
+        Commands::Doctor => {
+            // Quick health check + client detection
+            println!();
+            println!("  {} Checking Erebyx-OS...", "•".to_string());
+
+            // Check server
+            match ErebyxClient::new() {
+                Ok(client) => match client.health().await {
+                    Ok(_) => println!("  {} Server: connected", "✓"),
+                    Err(e) => println!("  {} Server: {}", "✗", e),
+                },
+                Err(e) => println!("  {} Server: {} (set EREBYX_API_KEY)", "✗", e),
+            }
+
+            // Check clients
+            let clients = setup::detect::detect_clients();
+            if clients.is_empty() {
+                println!("  {} No AI clients detected", "✗");
+            } else {
+                for client in &clients {
+                    let status = if client.config_exists {
+                        format!("{} configured", "✓")
+                    } else {
+                        format!("{} not configured (run `erebyx setup`)", "✗")
+                    };
+                    println!("  {} {}: {}", "•", client.name, status);
+                }
+            }
+            println!();
         }
 
         Commands::RestoreIdentity {
@@ -139,6 +175,23 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("remember", args).await?;
+            print_response(&resp.content, resp.is_error, json_mode);
+            if resp.is_error {
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Context { topic, limit } => {
+            let client = ErebyxClient::new()?;
+            let mut args = json!({
+                "limit": limit,
+            });
+
+            if let Some(topic) = topic {
+                args["topic"] = json!(topic);
+            }
+
+            let resp = client.call_tool("context", args).await?;
             print_response(&resp.content, resp.is_error, json_mode);
             if resp.is_error {
                 std::process::exit(1);

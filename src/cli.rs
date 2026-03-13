@@ -167,6 +167,31 @@ pub enum Commands {
         diary: Option<String>,
     },
 
+    /// Zero-config memory retrieval (no params needed)
+    Context {
+        /// Optional topic hint to focus retrieval
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Max memories to return (default: 5)
+        #[arg(long, default_value = "5")]
+        limit: u32,
+    },
+
+    /// Configure memory for all detected AI clients
+    Setup {
+        /// API key (or set EREBYX_API_KEY env var)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// API URL override (default: https://core.erebyx.com)
+        #[arg(long)]
+        api_url: Option<String>,
+    },
+
+    /// Check erebyx-os server health and client configurations
+    Doctor,
+
     /// Check erebyx-os server health
     Health,
 }

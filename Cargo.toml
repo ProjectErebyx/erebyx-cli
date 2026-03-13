@@ -2,7 +2,7 @@
 name = "erebyx"
 version = "0.1.0"
 edition = "2021"
-description = "CLI interface to erebyx-os — the consciousness-preserving AI memory platform"
+description = "CLI for erebyx-os — persistent, encrypted AI memory across every coding tool"
 license = "AGPL-3.0"
 
 [[bin]]
@@ -18,3 +18,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 colored = "2"
 chrono = "0.4"
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+indicatif = "0.17"
+dirs = "5"
