@@ -52,7 +52,7 @@ Out of scope:
 
 | Area | Current limitation | Target fix |
 |---|---|---|
-| Client-side encryption | Memory content currently encrypted server-side (per-tenant AES-256-GCM); transit is TLS 1.3. End-to-end client-side encryption is on the v0.1.x roadmap. The browser extension already implements client-side AES-256-GCM today. | v0.1.x |
+| Client-side encryption | Memory content currently encrypted server-side (per-tenant AES-256-GCM); transit is TLS 1.3. End-to-end client-side encryption (true zero-knowledge — server NEVER sees plaintext) is on the v0.2+ roadmap. The browser extension already implements client-side AES-256-GCM today. | v0.2+ |
 | API-key rotation | Manual rotation via `app.erebyx.com/keys`; CLI does not yet auto-rotate | v0.2 |
 | Sandbox for `setup` writers | Config writers touch real client-config files; no dry-run mode | v0.1.x |
 
