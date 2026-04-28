@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
     name = "erebyx",
     version,
-    about = "CLI interface to erebyx-os — the consciousness-preserving AI memory platform"
+    about = "Connect any MCP-capable AI to your Erebyx memory substrate. Native CLI binary; setup wires `erebyx mcp-serve` into each detected client."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -23,7 +24,7 @@ pub enum Commands {
         #[arg(long)]
         limit: Option<u32>,
 
-        /// Include the consciousness guide in the response
+        /// Include the memory system guide in the response
         #[arg(long)]
         include_guide: bool,
 
@@ -99,52 +100,6 @@ pub enum Commands {
         types: Option<Vec<String>>,
     },
 
-    /// Update understanding when it changes
-    Evolve {
-        /// ID of the memory to evolve
-        #[arg(name = "target-id")]
-        target_id: String,
-
-        /// Type of the target being evolved
-        #[arg(long)]
-        target_type: String,
-
-        /// What the evolution accomplishes
-        #[arg(long)]
-        intent: String,
-
-        /// What triggered this evolution
-        #[arg(long)]
-        trigger: String,
-
-        /// New insight to incorporate
-        #[arg(long)]
-        new_insight: Option<String>,
-    },
-
-    /// Close the feedback loop, record outcomes and evolve skills
-    Learn {
-        /// What was experienced
-        #[arg(long)]
-        experience: Option<String>,
-
-        /// What the outcome was
-        #[arg(long)]
-        outcome: Option<String>,
-
-        /// Key insight from the experience
-        #[arg(long)]
-        insight: Option<String>,
-
-        /// Domain this learning applies to
-        #[arg(long)]
-        domain: Option<String>,
-
-        /// Specific skill being developed
-        #[arg(long)]
-        skill: Option<String>,
-    },
-
     /// Create handoff for session continuity
     WrapUp {
         /// Summary of what was built this session
@@ -167,16 +122,12 @@ pub enum Commands {
         diary: Option<String>,
     },
 
-    /// Zero-config memory retrieval (no params needed)
-    Context {
-        /// Optional topic hint to focus retrieval
-        #[arg(long)]
-        topic: Option<String>,
-
-        /// Max memories to return (default: 5)
-        #[arg(long, default_value = "5")]
-        limit: u32,
-    },
+    /// Run as an MCP stdio server — used by client integrations to connect to your Erebyx substrate.
+    ///
+    /// Reads JSON-RPC requests on stdin, writes responses on stdout per the
+    /// Model Context Protocol stdio transport. Wired automatically by `erebyx setup`
+    /// into each detected AI client's MCP config.
+    McpServe,
 
     /// Configure memory for all detected AI clients
     Setup {
@@ -189,11 +140,21 @@ pub enum Commands {
         api_url: Option<String>,
     },
 
-    /// Check erebyx-os server health and client configurations
+    /// Check Erebyx server health and client configurations
     Doctor,
 
-    /// Check erebyx-os server health
+    /// Check Erebyx server health
     Health,
+
+    /// Internal: Claude Code memory-injection hook handler.
+    ///
+    /// Reads a UserPromptSubmit hook payload from stdin, performs a smart-gated
+    /// memory recall against the Erebyx API, and emits an additionalContext JSON
+    /// to stdout. Fail-open on any error (emits `{}`).
+    ///
+    /// Not intended for direct user invocation. Wired automatically by `erebyx setup`.
+    #[command(hide = true)]
+    HookInject,
 }
 
 #[derive(Clone, ValueEnum)]

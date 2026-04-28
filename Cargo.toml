@@ -1,9 +1,18 @@
 [package]
 name = "erebyx"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "CLI for erebyx-os — persistent, encrypted AI memory across every coding tool"
-license = "AGPL-3.0"
+rust-version = "1.75"
+description = "Connect any MCP-capable AI to your Erebyx memory substrate. Persistent memory across every AI you use. Native CLI binary; encrypted in transit and at rest server-side; client-side end-to-end encryption ships in v0.1.x."
+license = "Apache-2.0"
+repository = "https://github.com/ProjectErebyx/erebyx-cli"
+homepage = "https://erebyx.com"
+readme = "README.md"
+keywords = ["mcp", "ai", "memory", "claude", "cli"]
+categories = ["command-line-utilities"]
+# Block accidental crates.io publish until launch moment.
+# Set to true (or remove this line) only when ready to flip public.
+publish = false
 
 [[bin]]
 name = "erebyx"
@@ -14,7 +23,7 @@ clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std"] }
 anyhow = "1"
 colored = "2"
 chrono = "0.4"

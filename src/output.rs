@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use colored::Colorize;
 use serde_json::Value;
 
@@ -48,12 +49,8 @@ fn print_error_content(content: &Value) {
 fn print_value(value: &Value, depth: usize) {
     match value {
         Value::String(s) => {
-            // Multi-line strings get printed as-is
-            if s.contains('\n') {
-                println!("{}", s);
-            } else {
-                println!("{}", s);
-            }
+            // Strings render as-is (preserves embedded newlines).
+            println!("{}", s);
         }
         Value::Object(map) => {
             for (key, val) in map {

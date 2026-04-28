@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 mod cli;
 mod client;
 mod output;
@@ -5,10 +6,11 @@ mod setup;
 
 use anyhow::Result;
 use clap::Parser;
-use serde_json::json;
+use serde_json::{json, Value};
+use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
-use client::ErebyxClient;
+use client::{session_id, ErebyxClient};
 use output::{print_error, print_response};
 
 #[tokio::main]
@@ -35,10 +37,14 @@ async fn run(cli: Cli) -> Result<()> {
             setup::run_setup(api_key, api_url).await?;
         }
 
+        Commands::HookInject => {
+            hook_inject().await;
+        }
+
         Commands::Doctor => {
             // Quick health check + client detection
             println!();
-            println!("  {} Checking Erebyx-OS...", "•".to_string());
+            println!("  {} Checking Erebyx...", "•".to_string());
 
             // Check server
             match ErebyxClient::new() {
@@ -181,80 +187,8 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Commands::Context { topic, limit } => {
-            let client = ErebyxClient::new()?;
-            let mut args = json!({
-                "limit": limit,
-            });
-
-            if let Some(topic) = topic {
-                args["topic"] = json!(topic);
-            }
-
-            let resp = client.call_tool("context", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
-            if resp.is_error {
-                std::process::exit(1);
-            }
-        }
-
-        Commands::Evolve {
-            target_id,
-            target_type,
-            intent,
-            trigger,
-            new_insight,
-        } => {
-            let client = ErebyxClient::new()?;
-            let mut args = json!({
-                "target_id": target_id,
-                "target_type": target_type,
-                "intent": intent,
-                "trigger": trigger,
-            });
-
-            if let Some(insight) = new_insight {
-                args["new_insight"] = json!(insight);
-            }
-
-            let resp = client.call_tool("evolve", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
-            if resp.is_error {
-                std::process::exit(1);
-            }
-        }
-
-        Commands::Learn {
-            experience,
-            outcome,
-            insight,
-            domain,
-            skill,
-        } => {
-            let client = ErebyxClient::new()?;
-            let mut args = json!({});
-
-            if let Some(experience) = experience {
-                args["experience"] = json!(experience);
-            }
-            if let Some(outcome) = outcome {
-                args["outcome"] = json!(outcome);
-            }
-            if let Some(insight) = insight {
-                args["insight"] = json!(insight);
-            }
-            if let Some(domain) = domain {
-                args["domain"] = json!(domain);
-            }
-            if let Some(skill) = skill {
-                args["skill"] = json!(skill);
-            }
-
-            let resp = client.call_tool("learn", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
-            if resp.is_error {
-                std::process::exit(1);
-            }
+        Commands::McpServe => {
+            mcp_serve().await?;
         }
 
         Commands::WrapUp {
@@ -289,4 +223,207 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// MCP stdio server bridge.
+///
+/// Reads JSON-RPC requests line-by-line from stdin, forwards them to the
+/// substrate's `/mcp/` HTTP endpoint with the configured API key, and writes
+/// each response back to stdout per MCP's stdio transport
+/// (one JSON-RPC message per line, framed by newline).
+///
+/// Authoritative protocol behavior — including tool surface, schemas, and
+/// initialization — lives on the substrate. This bridge stays intentionally
+/// thin so it never drifts out of sync with the server.
+///
+/// Errors on a single message are surfaced as JSON-RPC error responses so the
+/// client never sees a hung pipe. Fatal errors (no API key, unreachable host)
+/// exit non-zero so the parent harness can report a launch failure.
+async fn mcp_serve() -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let client = ErebyxClient::new()?;
+    let stdin = tokio::io::stdin();
+    let mut reader = BufReader::new(stdin).lines();
+    let mut stdout = tokio::io::stdout();
+
+    while let Some(line) = reader.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let response = match client.proxy_jsonrpc(trimmed).await {
+            Ok(v) => v,
+            Err(e) => json!({
+                "jsonrpc": "2.0",
+                "id": serde_json::from_str::<Value>(trimmed)
+                    .ok()
+                    .and_then(|v| v.get("id").cloned())
+                    .unwrap_or(Value::Null),
+                "error": {
+                    "code": -32603,
+                    "message": format!("erebyx mcp-serve bridge error: {}", e)
+                }
+            }),
+        };
+
+        let serialized = serde_json::to_string(&response)?;
+        stdout.write_all(serialized.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+        stdout.flush().await?;
+    }
+
+    Ok(())
+}
+
+/// Native hook-inject handler for Claude Code UserPromptSubmit hook.
+///
+/// Reads JSON from stdin, smart-gates short/greeting messages, calls the
+/// Erebyx remember endpoint with a 500ms hard timeout, and emits an
+/// `additionalContext` JSON to stdout. Fail-open: any error path emits `{}`
+/// so Claude Code never blocks on a memory hiccup.
+///
+/// Replaces a 100-line bash + python3 pipe-chain. Single Rust binary, no
+/// runtime dependencies, shared connection pool, predictable latency.
+async fn hook_inject() {
+    // Detect direct/interactive invocation — this command is for Claude Code hooks,
+    // not direct CLI use. Bail with a helpful message instead of hanging on stdin.
+    if std::io::stdin().is_terminal() {
+        eprintln!("erebyx hook-inject is an internal command for Claude Code hooks.");
+        eprintln!("It reads JSON from stdin. You probably want `erebyx remember <query>` instead.");
+        std::process::exit(2);
+    }
+
+    // Always emit valid JSON to stdout — never panic, never error out.
+    let result = run_hook_inject().await;
+    println!("{}", result);
+}
+
+async fn run_hook_inject() -> String {
+    let empty = "{}".to_string();
+
+    // Read hook input from stdin.
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        return empty;
+    }
+
+    // Parse the user_message field.
+    let parsed: Value = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(_) => return empty,
+    };
+    let user_message = parsed
+        .get("user_message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .trim();
+
+    // Smart gate: skip short messages and common greetings.
+    // Pattern unified with `erebyx_sdk::middleware::is_greeting` so the CLI
+    // hook and the SDK middleware skip the same set of messages.
+    if user_message.len() < 15 {
+        return empty;
+    }
+    let lower = user_message.to_lowercase();
+    let greetings = [
+        "hey", "hi", "hello", "thanks", "thank you", "bye", "ok", "yes", "no",
+        "sure", "cool", "nice", "got it", "sounds good", "okay", "yep", "nope", "alright",
+    ];
+    if lower.len() < 30 && greetings.iter().any(|g| lower.starts_with(g)) {
+        return empty;
+    }
+
+    // Truncate query to 200 chars (UTF-8 safe).
+    let query: String = user_message.chars().take(200).collect();
+
+    // Read API key + URL from env. Fail-open if missing.
+    let api_key = match std::env::var("EREBYX_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => return empty,
+    };
+    let api_url = std::env::var("EREBYX_API_URL")
+        .unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+
+    // Build a quick HTTP client with 500ms hard timeout.
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return empty,
+    };
+
+    let url = format!("{}/v0/memory/remember", api_url.trim_end_matches('/'));
+    let body = json!({ "query": query, "limit": 5 });
+
+    let response = match http
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", &api_key)
+        .header("X-Instance-ID", "default")
+        .header("X-Erebyx-Session-Id", session_id())
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return empty,
+    };
+
+    // Cap response body to 10 MiB — defensive against runaway server payloads.
+    if let Some(len) = response.content_length() {
+        if len > 10 * 1024 * 1024 {
+            return empty;
+        }
+    }
+
+    let data: Value = match response.json().await {
+        Ok(v) => v,
+        Err(_) => return empty,
+    };
+
+    // Memories live under either `memories` or `results` depending on response shape.
+    let memories = data
+        .get("memories")
+        .or_else(|| data.get("results"))
+        .and_then(|m| m.as_array())
+        .filter(|arr| !arr.is_empty());
+
+    let memories = match memories {
+        Some(m) => m,
+        None => return empty,
+    };
+
+    // Format injection context (cap total at ~1500 chars to keep prompt small).
+    let mut lines: Vec<String> = vec!["[Erebyx Memory Context]".to_string()];
+    let mut total = 0usize;
+    for m in memories.iter().take(5) {
+        let content = m
+            .get("content")
+            .or_else(|| m.get("text"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let snippet: String = content.chars().take(300).collect();
+        if total + snippet.len() > 1500 {
+            break;
+        }
+        if !snippet.trim().is_empty() {
+            lines.push(format!("- {}", snippet));
+            total += snippet.len();
+        }
+    }
+
+    if lines.len() < 2 {
+        return empty;
+    }
+
+    json!({
+        "additionalContext": [{
+            "type": "text",
+            "text": lines.join("\n")
+        }]
+    })
+    .to_string()
 }

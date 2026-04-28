@@ -1,7 +1,110 @@
+// SPDX-License-Identifier: Apache-2.0
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
+
+/// Maximum response body size we will buffer (10 MiB).
+const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Resolve the per-process session id used for the `X-Erebyx-Session-Id`
+/// header. Resolution order:
+///
+/// 1. `EREBYX_SESSION_ID` env var (overrides everything; useful in CI/tests).
+/// 2. Stable file at `~/.erebyx/session-id` — created on first use.
+/// 3. Cached in-process for the lifetime of the binary.
+///
+/// The header lets the substrate attribute hook + tool calls to a stable
+/// caller without leaking PII. It is intentionally cheap to compute and never
+/// blocks substrate calls — any I/O error falls back to a fresh per-process id.
+pub fn session_id() -> &'static str {
+    use std::sync::OnceLock;
+    static SESSION_ID: OnceLock<String> = OnceLock::new();
+    SESSION_ID.get_or_init(resolve_session_id).as_str()
+}
+
+fn resolve_session_id() -> String {
+    if let Ok(s) = env::var("EREBYX_SESSION_ID") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".erebyx");
+        let path = dir.join("session-id");
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        let fresh = generate_session_id();
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &fresh).is_ok() {
+            // Best-effort 0600 on unix so the id is not world-readable.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &path,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+        }
+        return fresh;
+    }
+
+    generate_session_id()
+}
+
+/// Generate a UUID-shaped 128-bit random id (RFC 4122 v4 layout) without
+/// pulling in the `uuid` crate. We only need uniqueness, not parsing.
+fn generate_session_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // Mix time + process id + thread id + an internal counter so concurrent
+    // instances on the same machine still diverge.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let mut seed = now ^ (pid.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let mut out = [0u8; 16];
+    for byte in out.iter_mut() {
+        // xorshift64-style step on the lower 64 bits.
+        let mut x = (seed & 0xFFFF_FFFF_FFFF_FFFF) as u64;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        seed = (seed >> 8) ^ (x as u128);
+        *byte = (x & 0xFF) as u8;
+    }
+    // Set version (4) and variant (RFC 4122) bits.
+    out[6] = (out[6] & 0x0F) | 0x40;
+    out[8] = (out[8] & 0x3F) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        out[0], out[1], out[2], out[3],
+        out[4], out[5],
+        out[6], out[7],
+        out[8], out[9],
+        out[10], out[11], out[12], out[13], out[14], out[15],
+    )
+}
+
+/// Return true if URL is HTTPS, or HTTP pointed at localhost (dev affordance).
+fn is_safe_url(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    if let Some(rest) = url.strip_prefix("http://") {
+        let host_part = rest.split('/').next().unwrap_or("");
+        let host = host_part.split(':').next().unwrap_or("");
+        return matches!(host, "localhost" | "127.0.0.1" | "::1");
+    }
+    false
+}
 
 /// HTTP client for erebyx-os MCP endpoint.
 /// Sends JSON-RPC tool calls and returns the result content.
@@ -27,8 +130,23 @@ impl ErebyxClient {
         let base_url =
             env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
+        // Default to "default" — same canonical tenant slice across CLI / SDK / extension.
+        // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
         let instance_id =
-            env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "cli".to_string());
+            env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+
+        if api_key.trim().is_empty() {
+            anyhow::bail!("EREBYX_API_KEY is set but empty");
+        }
+
+        // Reject non-HTTPS URLs (allow http://localhost:* for dev).
+        if !is_safe_url(&base_url) {
+            anyhow::bail!(
+                "EREBYX_API_URL must be https:// (got {}). \
+                 Plain http:// is only allowed for localhost/127.0.0.1.",
+                base_url
+            );
+        }
 
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -65,12 +183,22 @@ impl ErebyxClient {
             .header("Accept", "application/json")
             .header("X-API-Key", &self.api_key)
             .header("X-Instance-ID", &self.instance_id)
+            .header("X-Erebyx-Session-Id", session_id())
             .json(&body)
             .send()
             .await
-            .context("Failed to connect to erebyx-os")?;
+            .context("Failed to connect to Erebyx")?;
 
         let status = response.status();
+        if let Some(len) = response.content_length() {
+            if len > MAX_RESPONSE_BYTES {
+                anyhow::bail!(
+                    "Response body too large ({} bytes; cap is {})",
+                    len,
+                    MAX_RESPONSE_BYTES
+                );
+            }
+        }
         let response_text = response
             .text()
             .await
@@ -138,6 +266,55 @@ impl ErebyxClient {
         Ok(McpResponse { content, is_error })
     }
 
+    /// Forward a raw JSON-RPC request body to the substrate `/mcp/` endpoint
+    /// and return the parsed JSON-RPC response.
+    ///
+    /// Used by `erebyx mcp-serve` to bridge an MCP stdio client to the
+    /// substrate over HTTP. The request body is passed through verbatim so
+    /// initialization, capabilities, tool schemas, and prompts all stay
+    /// authoritative on the server.
+    pub async fn proxy_jsonrpc(&self, raw_body: &str) -> Result<Value> {
+        let url = format!("{}/mcp/", self.base_url.trim_end_matches('/'));
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("X-API-Key", &self.api_key)
+            .header("X-Instance-ID", &self.instance_id)
+            .header("X-Erebyx-Session-Id", session_id())
+            .body(raw_body.to_owned())
+            .send()
+            .await
+            .context("Failed to connect to Erebyx")?;
+
+        let status = response.status();
+        if let Some(len) = response.content_length() {
+            if len > MAX_RESPONSE_BYTES {
+                anyhow::bail!(
+                    "Response body too large ({} bytes; cap is {})",
+                    len,
+                    MAX_RESPONSE_BYTES
+                );
+            }
+        }
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+
+        if !status.is_success() {
+            anyhow::bail!(
+                "Server returned HTTP {}: {}",
+                status.as_u16(),
+                truncate_safe(&body, 500)
+            );
+        }
+
+        serde_json::from_str(&body).context("Invalid JSON in MCP response")
+    }
+
     /// Check server health via GET /health
     pub async fn health(&self) -> Result<Value> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
@@ -147,11 +324,21 @@ impl ErebyxClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .header("X-Instance-ID", &self.instance_id)
+            .header("X-Erebyx-Session-Id", session_id())
             .send()
             .await
-            .context("Failed to connect to erebyx-os")?;
+            .context("Failed to connect to Erebyx")?;
 
         let status = response.status();
+        if let Some(len) = response.content_length() {
+            if len > MAX_RESPONSE_BYTES {
+                anyhow::bail!(
+                    "Health response too large ({} bytes; cap is {})",
+                    len,
+                    MAX_RESPONSE_BYTES
+                );
+            }
+        }
         let response_text = response
             .text()
             .await

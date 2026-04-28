@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! AI client detection -- finds installed coding AI tools on the system.
 
 use std::path::PathBuf;

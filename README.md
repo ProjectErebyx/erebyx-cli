@@ -11,14 +11,14 @@
 ## Install in 5 lines
 
 ```bash
-npx @erebyx/install-mcp@latest      # auto-detects every MCP-capable AI on your machine
-export EREBYX_API_KEY="erebyx_..."   # get one at https://app.erebyx.com/keys
+cargo install erebyx                  # native CLI binary
+export EREBYX_API_KEY="erebyx_..."    # get one at https://app.erebyx.com/keys
+erebyx setup                          # auto-detects every MCP-capable AI on your machine
 erebyx save "Anchor-based retrieval improves recall by 40%" --category insight
 erebyx remember "anchor retrieval"
-erebyx wrap-up "Built CLI integration" --whats-next "Add shell completions"
 ```
 
-That's the whole loop: install -> save -> remember -> wrap-up. Memory follows you across every MCP client on this machine.
+That's the whole loop: install -> setup -> save -> remember. Memory follows you across every MCP client on this machine.
 
 ---
 
@@ -50,7 +50,8 @@ Substrate behavior (atomization, retrieval, dream cycle, encryption) lives behin
 <td>
 
 ```bash
-npx @erebyx/install-mcp
+cargo install erebyx
+erebyx setup
 # Detects ~/.claude/settings.json
 # Writes MCP server entry
 # Restart Claude Code
@@ -62,7 +63,8 @@ See [examples/hooks/claude-code/](https://github.com/ProjectErebyx/erebyx-os/blo
 <td>
 
 ```bash
-npx @erebyx/install-mcp
+cargo install erebyx
+erebyx setup
 # Detects .cursor/mcp.json
 # Writes MCP server entry
 # Restart Cursor
@@ -85,7 +87,29 @@ Or call the HTTP API directly: see [examples/hooks/raw-http/](https://github.com
 </tr>
 </table>
 
-The installer auto-detects: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code (Continue / Cline), Aider, LM Studio, Zed.
+`erebyx setup` auto-detects: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code / Copilot.
+
+### What `erebyx setup` writes
+
+For every detected client, the setup writer drops an MCP server entry pointing at the local `erebyx mcp-serve` binary. Example (Claude Code, Cursor, Windsurf):
+
+```jsonc
+{
+  "mcpServers": {
+    "erebyx-os": {
+      "command": "/usr/local/bin/erebyx",
+      "args": ["mcp-serve"],
+      "env": {
+        "EREBYX_API_KEY": "erebyx_...",
+        "EREBYX_API_URL": "https://core.erebyx.com",
+        "EREBYX_INSTANCE_ID": "default"
+      }
+    }
+  }
+}
+```
+
+`erebyx mcp-serve` is a stdio bridge — it reads JSON-RPC on stdin, forwards to the substrate over HTTPS, and writes responses on stdout. Your AI client speaks pure MCP; the binary does no protocol logic of its own.
 
 ---
 
@@ -159,6 +183,12 @@ erebyx health    # server reachability + version
 erebyx doctor    # full client config audit
 ```
 
+### MCP stdio server
+```bash
+erebyx mcp-serve   # invoked by AI clients; reads JSON-RPC on stdin, writes on stdout
+```
+You should not need to run this by hand — `erebyx setup` wires it into each detected client's MCP config. Use it for direct MCP-over-stdio testing if you're building a custom integration.
+
 ### JSON output (for agents)
 ```bash
 erebyx remember "query" --json | jq '.memories[0].content'
@@ -170,18 +200,19 @@ erebyx remember "query" --json | jq '.memories[0].content'
 
 ```
 src/
-  main.rs    Clap dispatch
-  cli.rs     Command surface (5 cognitive verbs + setup, doctor, health, context)
+  main.rs    Clap dispatch + mcp-serve stdio bridge
+  cli.rs     Command surface (5 cognitive verbs + setup, doctor, health, mcp-serve)
   client.rs  HTTP client (reqwest) for MCP JSON-RPC
   output.rs  JSON vs pretty formatting
   setup/     MCP config writers (one per AI client)
 ```
 
-The CLI calls the MCP HTTP endpoint at `${EREBYX_API_URL}/mcp/` using JSON-RPC. Each command maps to one MCP tool call. Health uses `GET /health` directly.
+The CLI calls the MCP HTTP endpoint at `${EREBYX_API_URL}/mcp/` using JSON-RPC. Each command maps to one MCP tool call. Health uses `GET /health` directly. `mcp-serve` reads JSON-RPC on stdin and forwards verbatim to the same `/mcp/` endpoint, so AI clients can speak MCP stdio while the substrate stays HTTPS-only.
 
 ### Headers on every request
 - `X-API-Key` — authentication
 - `X-Instance-ID` — multi-tenant routing
+- `X-Erebyx-Session-Id` — stable per-install id (override with `EREBYX_SESSION_ID`)
 - `Content-Type: application/json`
 
 ---
@@ -191,11 +222,7 @@ The CLI calls the MCP HTTP endpoint at `${EREBYX_API_URL}/mcp/` using JSON-RPC. 
 Track releases in [CHANGELOG.md](CHANGELOG.md). Backward compatibility is a hard guarantee within v0.1.x — every release lists explicit breaking changes (none expected before v0.2).
 
 ```bash
-# If installed via cargo
 cargo install erebyx --force
-
-# If installed via npx (auto-resolves latest)
-npx @erebyx/install-mcp@latest
 ```
 
 ---

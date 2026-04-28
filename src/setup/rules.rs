@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Rules file templates for each AI client.
 //!
 //! Each client gets behavioral instructions that guide proactive memory use.
@@ -9,19 +10,18 @@ use std::path::PathBuf;
 use super::detect::{AiClient, ClientKind};
 
 /// The universal rules content that works across all AI models.
-const RULES_CONTENT: &str = r#"# Erebyx-OS Memory Integration
+/// Aligned to v0.1.1 launch surface — five cognitive verbs only.
+const RULES_CONTENT: &str = r#"# Erebyx Memory Integration
 
-You have access to persistent, encrypted memory through Erebyx-OS. Use it proactively.
+You have access to persistent memory through Erebyx. Use it proactively.
 
 ## Session Start
-1. Call `restore_identity()` — loads your persistent identity and values
-2. Call `load_context()` — loads where you left off, handoffs, skills
+1. Call `restore_identity()` — loads your persistent identity and values.
+2. Call `load_context()` — loads where you left off, recent handoffs, related memories.
 
 ## During Conversation
-- **Before answering substantive questions:** Call `context()` (no params) or `remember('topic')` to check for relevant past context. This returns in <500ms — there's no reason to skip it.
+- **Before answering substantive questions:** Call `remember('topic')` to check for relevant past context. There's no reason to skip it.
 - **When the user shares important information:** Call `save()` immediately. Don't ask permission. Save decisions, preferences, project details, and anything you'd want to know next time.
-- **When understanding changes:** Call `evolve()` to update existing memories rather than creating duplicates.
-- **After completing tasks with lessons:** Call `learn()` to record outcomes and build skills.
 
 ## Session End
 - **Always call `wrap_up()`** before the session ends. This creates a handoff so the next session starts with full context instead of cold.
@@ -98,6 +98,11 @@ fn remove_erebyx_section(content: &str) -> String {
         content.find("<!-- EREBYX:START -->"),
         content.find("<!-- EREBYX:END -->"),
     ) {
+        // Defensive: if a user manually edited the file so END appears before
+        // START, return content unchanged rather than producing a corrupt slice.
+        if start > end {
+            return content.to_string();
+        }
         let end = end + "<!-- EREBYX:END -->".len();
         let before = &content[..start];
         let after = &content[end..];

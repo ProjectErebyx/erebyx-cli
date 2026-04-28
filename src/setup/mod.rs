@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `erebyx setup` — one-command memory installation for all AI coding clients.
 //!
 //! Detects installed clients (Claude Code, Cursor, Windsurf, Continue, Zed, Copilot),
@@ -10,7 +11,7 @@ pub mod rules;
 
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{Confirm, Input};
+use dialoguer::{Confirm, Password};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use detect::{detect_clients, AiClient};
@@ -20,11 +21,11 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     println!();
     println!(
         "{}",
-        "  erebyx-os setup — universal AI memory".bold().cyan()
+        "  Erebyx setup — universal AI memory".bold().cyan()
     );
     println!(
         "{}",
-        "  Install persistent, encrypted memory across all your AI tools."
+        "  Install persistent memory across all your AI tools."
             .dimmed()
     );
     println!();
@@ -64,9 +65,10 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
                 println!("  {} Using EREBYX_API_KEY from environment", "✓".green().bold());
                 key
             } else {
-                Input::new()
+                // Mask input — API keys must never land in terminal scrollback or shell history.
+                Password::new()
                     .with_prompt("  Enter your Erebyx API key")
-                    .interact_text()?
+                    .interact()?
             }
         }
     };
@@ -182,7 +184,7 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     println!();
     if success_count > 0 {
         println!(
-            "  {} Configured {} client(s) with Erebyx-OS memory.",
+            "  {} Configured {} client(s) with Erebyx memory.",
             "✓".green().bold(),
             success_count
         );
@@ -197,21 +199,22 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
 
     println!();
     println!("  {}", "What happens now:".bold());
-    println!("  • Your AI tools will have access to Erebyx-OS memory tools");
+    println!("  • Your AI tools will have access to Erebyx memory tools");
     println!("  • Rules files guide your AI to use memory proactively");
-    println!("  • Memory is encrypted and portable across all configured clients");
+    println!("  • Memory persists across every configured client");
 
-    // Claude Code hooks need EREBYX_API_KEY in the shell environment at runtime
+    // Claude Code hooks need EREBYX_API_KEY in the shell environment at runtime.
+    // We deliberately do NOT echo the key — it would land in shell history.
     if has_claude_code {
         println!();
         println!("  {}", "Required for Claude Code hooks:".bold().yellow());
         println!("  Add this to your shell profile (~/.zshrc or ~/.bashrc):");
         println!();
-        println!("    export EREBYX_API_KEY=\"{}\"", api_key);
+        println!("    export EREBYX_API_KEY=\"<your-api-key>\"");
         println!();
         println!(
             "  {}",
-            "The MCP server reads it from config, but hooks need it in your shell."
+            "Use the same key you pasted above. The MCP server reads it from config; hooks need it in your shell."
                 .dimmed()
         );
     }

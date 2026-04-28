@@ -1,3 +1,27 @@
+# Build
 /target
-Cargo.lock
-!Cargo.lock
+/dist
+/build
+
+# Cargo
+# (lockfile committed for reproducible binary builds)
+
+# Local-only notes (do not publish)
+local-notes/
+*.local.md
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+outputs/

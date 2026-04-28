@@ -1,157 +1,44 @@
-//! Claude Code hooks -- automatic memory injection before every response.
+// SPDX-License-Identifier: Apache-2.0
+//! Claude Code hooks — automatic memory injection before every response.
 //!
-//! Installs a UserPromptSubmit hook that:
-//! 1. Extracts topic from user prompt
-//! 2. Calls Erebyx-OS REST API to search memories
-//! 3. Injects top memories as additionalContext
+//! Installs a UserPromptSubmit hook that calls `erebyx hook-inject` natively.
+//! Smart-gating, JSON parsing, the REST call, and additionalContext formatting
+//! all happen inside the Rust binary — no python3 dependency, no shell pipes,
+//! single process spawn per message.
 //!
-//! Smart gate: skips messages <15 chars or greeting patterns.
-//! Timeout: 500ms hard limit (fail open).
-//!
-//! Security: user content is never interpolated into shell or Python source.
-//! All untrusted data flows through stdin/pipes to avoid injection.
-//! API key is read from $EREBYX_API_KEY at runtime, never embedded in scripts.
+//! The hook is fail-open: any error path emits `{}` so Claude Code never blocks.
+//! Timeout: 500ms hard limit (set inside `erebyx hook-inject`).
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
-use std::process::Command;
 
 use super::detect::AiClient;
 
-/// Check that python3 is available on PATH.
-/// Returns Ok(()) if found, or a descriptive error if missing.
-pub fn check_python3_available() -> Result<()> {
-    let found = Command::new("python3")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !found {
-        bail!(
-            "python3 is required for Erebyx memory hooks but was not found on PATH.\n\
-             Install Python 3 and ensure `python3` is available:\n\
-             - macOS: `brew install python3` or download from https://python.org\n\
-             - Ubuntu/Debian: `sudo apt install python3`\n\
-             - Fedora: `sudo dnf install python3`\n\
-             Then re-run `erebyx setup`."
-        );
-    }
-
-    Ok(())
-}
-
 /// The hook script that runs on every user message in Claude Code.
 ///
-/// Security: all user content and API responses flow through stdin/pipes.
-/// Nothing untrusted is ever interpolated into shell variables or Python source.
-/// The API key is read from $EREBYX_API_KEY at runtime (set by MCP server env config).
+/// Trivial wrapper: hands stdin off to `erebyx hook-inject`. All logic
+/// (gating, query, REST call, formatting) lives in the native binary.
+/// The API key is read from $EREBYX_API_KEY by the binary itself.
 fn hook_script(api_url: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
-# Erebyx-OS Memory Injector -- Claude Code UserPromptSubmit Hook
-# Automatically retrieves relevant memories before every response.
-# Fail-open: if memory is unavailable, proceeds without injection.
-# Timeout: 500ms hard limit.
-# Requires: EREBYX_API_KEY environment variable
+# Erebyx Memory Injector — Claude Code UserPromptSubmit Hook
+# Hands stdin to the native `erebyx hook-inject` handler.
+# Fail-open: any error path emits {{}}.
 
-set -euo pipefail
+set -u
 
 # Fail open if API key is not set
 if [ -z "${{EREBYX_API_KEY:-}}" ]; then
-    echo '{{}}'
+    printf '%s' '{{}}'
     exit 0
 fi
 
-# Read raw hook input from stdin into a temp file so multiple consumers can read it
-HOOK_INPUT=$(cat)
+# Pass api_url through env so hook-inject doesn't need flag parsing.
+export EREBYX_API_URL="${{EREBYX_API_URL:-{api_url}}}"
 
-# Extract user message via Python, piping raw JSON through stdin (no interpolation)
-USER_MESSAGE=$(printf '%s' "$HOOK_INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('user_message', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
-
-# Smart gate: skip short messages and greetings
-MSG_LEN=${{#USER_MESSAGE}}
-if [ "$MSG_LEN" -lt 15 ]; then
-    echo '{{}}'
-    exit 0
-fi
-
-# Skip common greetings
-LOWER_MSG=$(echo "$USER_MESSAGE" | tr '[:upper:]' '[:lower:]')
-case "$LOWER_MSG" in
-    hey*|hi*|hello*|thanks*|thank\ you*|bye*|ok*|yes|no|sure|cool|nice)
-        echo '{{}}'
-        exit 0
-        ;;
-esac
-
-# Build the JSON search payload safely via Python stdin pipe
-SEARCH_PAYLOAD=$(printf '%s' "$USER_MESSAGE" | python3 -c "
-import sys, json
-query = sys.stdin.read()[:200]
-print(json.dumps({{'query': query, 'limit': 5}}))" 2>/dev/null || echo "")
-
-if [ -z "$SEARCH_PAYLOAD" ]; then
-    echo '{{}}'
-    exit 0
-fi
-
-# Call Erebyx-OS REST API with 500ms timeout, payload from variable (no interpolation risk)
-RESPONSE=$(printf '%s' "$SEARCH_PAYLOAD" | curl -s --max-time 0.5 \
-    -X POST "{api_url}/v0/memories/search" \
-    -H "Content-Type: application/json" \
-    -H "X-API-Key: $EREBYX_API_KEY" \
-    -H "X-Instance-ID: default" \
-    -d @- \
-    2>/dev/null || echo "")
-
-# If no response or error, fail open
-if [ -z "$RESPONSE" ]; then
-    echo '{{}}'
-    exit 0
-fi
-
-# Parse API response and format injection context via Python stdin pipe
-printf '%s' "$RESPONSE" | python3 -c "
-import json, sys
-
-try:
-    data = json.load(sys.stdin)
-    memories = data.get('memories', data.get('results', []))
-    if not memories:
-        print(json.dumps({{}}))
-        sys.exit(0)
-
-    lines = ['[Erebyx-OS Memory Context]']
-    total = 0
-    for m in memories[:5]:
-        content = m.get('content', m.get('text', ''))[:300]
-        if total + len(content) > 1500:
-            break
-        lines.append(f'- {{content}}')
-        total += len(content)
-
-    context_text = '\n'.join(lines)
-    if context_text.strip():
-        result = {{
-            'additionalContext': [{{
-                'type': 'text',
-                'text': context_text
-            }}]
-        }}
-        print(json.dumps(result))
-    else:
-        print(json.dumps({{}}))
-except Exception:
-    print(json.dumps({{}}))
-" 2>/dev/null || echo '{{}}'
+# Single native call. If it fails for any reason, emit {{}} and exit clean.
+exec erebyx hook-inject 2>/dev/null || printf '%s' '{{}}'
 "#,
         api_url = api_url,
     )
@@ -159,8 +46,7 @@ except Exception:
 
 /// Install Claude Code hooks for automatic memory injection.
 pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result<()> {
-    // Verify python3 is available before installing a hook that depends on it
-    check_python3_available()?;
+    // Native hook handler — no python3 or external interpreter required.
 
     // Write the hook script
     let hooks_dir = client.home_dir.join("hooks");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! MCP configuration file writing for each AI client.
 //!
 //! Each client has a different config format. We merge into existing configs
@@ -30,16 +31,35 @@ pub fn write_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> Resu
 }
 
 /// The MCP server entry common to most clients.
+///
+/// Points at the local `erebyx` binary running `mcp-serve` — a stdio bridge
+/// that forwards JSON-RPC to the substrate over HTTPS. The binary is whatever
+/// `erebyx setup` was invoked from, so the AI client launches the same
+/// version the customer just installed.
 fn erebyx_server_entry(api_key: &str, api_url: &str) -> Value {
     json!({
-        "command": "uvx",
-        "args": ["--from", "erebyx-os[mcp]", "python", "-m", "core.erebyx_mcp.server"],
+        "command": erebyx_command(),
+        "args": ["mcp-serve"],
         "env": {
             "EREBYX_API_KEY": api_key,
             "EREBYX_API_URL": api_url,
             "EREBYX_INSTANCE_ID": "default"
         }
     })
+}
+
+/// Resolve the `erebyx` binary path that AI clients should launch.
+///
+/// Prefers the absolute path of the currently-running binary so the launched
+/// MCP server is always the same version the user just ran `erebyx setup`
+/// from. Falls back to the bare command name if the current exe path can't
+/// be resolved (the client will then rely on `$PATH`).
+fn erebyx_command() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "erebyx".to_string())
 }
 
 /// Extract a mutable JSON object reference, returning a descriptive error
@@ -162,8 +182,8 @@ fn write_zed_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<P
             "erebyx-os".to_string(),
             json!({
                 "command": {
-                    "path": "uvx",
-                    "args": ["--from", "erebyx-os[mcp]", "python", "-m", "core.erebyx_mcp.server"],
+                    "path": erebyx_command(),
+                    "args": ["mcp-serve"],
                     "env": {
                         "EREBYX_API_KEY": api_key,
                         "EREBYX_API_URL": api_url,
@@ -204,8 +224,8 @@ fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Resul
             "erebyx-os".to_string(),
             json!({
                 "type": "stdio",
-                "command": "uvx",
-                "args": ["--from", "erebyx-os[mcp]", "python", "-m", "core.erebyx_mcp.server"],
+                "command": erebyx_command(),
+                "args": ["mcp-serve"],
                 "env": {
                     "EREBYX_API_KEY": api_key,
                     "EREBYX_API_URL": api_url,
