@@ -2,7 +2,7 @@
 
 > Connect any MCP-capable AI to your EREBYX memory substrate. Persistent memory across every AI you use.
 
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE-2.0)
 [![Version](https://img.shields.io/badge/version-0.1.1-green.svg)](CHANGELOG.md)
 [![DCO](https://img.shields.io/badge/DCO-required-orange.svg)](CONTRIBUTING.md#sign-off-dco)
 
@@ -258,7 +258,7 @@ Vulnerability reports → `legal@erebyx.com`. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE-2.0) at your option. See [NOTICE](NOTICE) for attribution requirements when used under Apache-2.0.
 
 ---
 

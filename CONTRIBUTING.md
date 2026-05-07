@@ -2,7 +2,7 @@
 
 Thanks for your interest. The CLI is a thin client over the EREBYX memory substrate — pull requests for setup-time UX, client compatibility, ergonomics, and reliability are welcome.
 
-By contributing, you agree your contributions are licensed under [Apache-2.0](LICENSE).
+By contributing, you agree your contributions are dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE-2.0) at your option.
 
 ---
 
