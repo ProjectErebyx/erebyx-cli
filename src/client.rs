@@ -113,6 +113,12 @@ pub struct ErebyxClient {
     base_url: String,
     api_key: String,
     instance_id: String,
+    /// Per-tenant passphrase for `argon2_passphrase` mode (Genesis Arche
+    /// default at v0.1.1+, Lock #20 2026-05-18). When set, sent as the
+    /// `X-Passphrase` header on every request. Resolved from
+    /// `EREBYX_PASSPHRASE`; empty values normalized to `None`. Future:
+    /// prompt-at-setup + OS-keychain persistence via the `keyring` crate.
+    passphrase: Option<String>,
 }
 
 /// JSON-RPC response from the MCP server
@@ -134,6 +140,16 @@ impl ErebyxClient {
         // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
         let instance_id =
             env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+
+        // Argon2id-default-on (Lock #20, 2026-05-18): Genesis Arche tenants
+        // register with a passphrase used to derive the KEK at request
+        // time. EREBYX_PASSPHRASE is the transport until prompt-at-setup +
+        // OS-keychain (keyring crate, follow-up). Empty strings normalize
+        // to None so legacy hkdf_api_key tenants don't accidentally
+        // transmit an empty X-Passphrase header.
+        let passphrase = env::var("EREBYX_PASSPHRASE")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         if api_key.trim().is_empty() {
             anyhow::bail!("EREBYX_API_KEY is set but empty");
@@ -159,6 +175,7 @@ impl ErebyxClient {
             base_url,
             api_key,
             instance_id,
+            passphrase,
         })
     }
 
@@ -176,14 +193,18 @@ impl ErebyxClient {
             }
         });
 
-        let response = self
+        let mut rb = self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .header("X-API-Key", &self.api_key)
             .header("X-Instance-ID", &self.instance_id)
-            .header("X-Erebyx-Session-Id", session_id())
+            .header("X-Erebyx-Session-Id", session_id());
+        if let Some(ref p) = self.passphrase {
+            rb = rb.header("X-Passphrase", p);
+        }
+        let response = rb
             .json(&body)
             .send()
             .await
@@ -276,14 +297,18 @@ impl ErebyxClient {
     pub async fn proxy_jsonrpc(&self, raw_body: &str) -> Result<Value> {
         let url = format!("{}/mcp/", self.base_url.trim_end_matches('/'));
 
-        let response = self
+        let mut rb = self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .header("X-API-Key", &self.api_key)
             .header("X-Instance-ID", &self.instance_id)
-            .header("X-Erebyx-Session-Id", session_id())
+            .header("X-Erebyx-Session-Id", session_id());
+        if let Some(ref p) = self.passphrase {
+            rb = rb.header("X-Passphrase", p);
+        }
+        let response = rb
             .body(raw_body.to_owned())
             .send()
             .await
