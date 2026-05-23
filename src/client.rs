@@ -198,7 +198,7 @@ impl ErebyxClient {
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
             .header("X-Erebyx-Session-Id", session_id());
         if let Some(ref p) = self.passphrase {
@@ -302,7 +302,7 @@ impl ErebyxClient {
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
             .header("X-Erebyx-Session-Id", session_id());
         if let Some(ref p) = self.passphrase {
@@ -347,7 +347,7 @@ impl ErebyxClient {
         let response = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
             .header("X-Erebyx-Session-Id", session_id())
             .send()

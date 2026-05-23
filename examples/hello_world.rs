@@ -84,7 +84,7 @@ async fn call_mcp_tool(
         .post(mcp_url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .header("X-API-Key", api_key)
+        .bearer_auth(api_key)
         .header("X-Instance-ID", instance_id)
         .json(&body)
         .send()

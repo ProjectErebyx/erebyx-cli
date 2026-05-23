@@ -210,7 +210,7 @@ src/
 The CLI calls the MCP HTTP endpoint at `${EREBYX_API_URL}/mcp/` using JSON-RPC. Each command maps to one MCP tool call. Health uses `GET /health` directly. `mcp-serve` reads JSON-RPC on stdin and forwards verbatim to the same `/mcp/` endpoint, so AI clients can speak MCP stdio while the substrate stays HTTPS-only.
 
 ### Headers on every request
-- `X-API-Key` — authentication
+- `Authorization: Bearer <api_key>` — authentication (substrate-canonical Bearer form; the legacy `X-API-Key` form was retired Day 13 of Genesis Arche sprint per PR #779)
 - `X-Instance-ID` — multi-tenant routing
 - `X-Erebyx-Session-Id` — stable per-install id (override with `EREBYX_SESSION_ID`)
 - `Content-Type: application/json`

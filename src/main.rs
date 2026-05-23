@@ -361,7 +361,7 @@ async fn run_hook_inject() -> String {
     let response = match http
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("X-API-Key", &api_key)
+        .bearer_auth(&api_key)
         .header("X-Instance-ID", "default")
         .header("X-Erebyx-Session-Id", session_id())
         .json(&body)
