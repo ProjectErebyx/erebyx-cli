@@ -8,20 +8,6 @@ Substrate-side release notes are published at [erebyx.com/changelog](https://ere
 
 ---
 
-## [Unreleased]
-
-### Changed
-
-- **License: Apache-2.0 → MIT-OR-Apache-2.0 dual** (crates.io ecosystem convention; Rust itself is dual-licensed). `LICENSE` renamed to `LICENSE-APACHE-2.0`; new `LICENSE-MIT` added. `Cargo.toml` license field updated. README + CONTRIBUTING + NOTICE updated.
-- **Cargo.toml `repository` URL**: lowercase `erebyx-cli` → canonical ALL-CAPS `EREBYX-CLI` to match brand convention (EREBYX is always capitalized).
-
-### Added
-
-- `.github/pull_request_template.md` — client-surface PR template with zero-substrate-logic checklist.
-- `.github/workflows/dco-check.yml` — DCO sign-off enforcement workflow.
-
----
-
 ## [0.1.1] — 2026-04-27 — Genesis Arche
 
 First public release. The CLI surfaces the EREBYX v0.1.1 cognitive verbs as native commands.
@@ -29,18 +15,23 @@ First public release. The CLI surfaces the EREBYX v0.1.1 cognitive verbs as nati
 ### Added
 
 - **5 cognitive verbs**: `restore-identity`, `load-context`, `save`, `remember`, `wrap-up`
-- **One-shot installer**: `npx @erebyx/install-mcp@latest` auto-detects every MCP-capable AI client on the machine and writes per-client MCP configs in a single pass. Idempotent on re-run.
-- **Multi-client support**: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code (Continue / Cline), Aider, LM Studio, Zed
-- **`erebyx setup`** — interactive API-key + per-client MCP config wizard
-- **`erebyx doctor`** — full client config audit (reports per-AI-client status)
-- **`erebyx health`** — server reachability + version probe
+- **`erebyx setup`** — interactive API-key + per-client MCP config wizard. Auto-detects every supported AI client on the machine and writes per-client MCP configs in a single pass. Idempotent on re-run.
+- **Multi-client support**: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code (Copilot)
+- **`erebyx doctor`** — 5-section client config audit (Environment / Auth / MCP / Clients / Hook)
+- **`erebyx health`** — substrate reachability + version probe
+- **`erebyx hook-inject`** — Claude Code `UserPromptSubmit` hook payload writer
+- **`erebyx hook-session-start`** — Claude Code `SessionStart` hook (identity + handoff context cold-load)
+- **`erebyx mcp-serve`** — stdio MCP bridge invoked by AI clients
 - **JSON mode** — every command supports `--json` for machine-readable output (agents, scripts, CI)
 - **`X-Erebyx-Hint` protocol support** — lifecycle hints surfaced in `--json` output. Hint values: `wrap_up_recommended`, `restore_identity_recommended`, `load_context_recommended`, `compact_imminent`. Honoring hints is optional.
 - **Cold-session auto-fire transparency** — first call against a fresh session transparently triggers `restore_identity` + `load_context` substrate-side. The CLI surfaces `X-Erebyx-Auto-Fired` headers so you can observe what happened.
+- **Dual-licensed** under MIT OR Apache-2.0 (crates.io ecosystem convention; Rust itself is dual-licensed).
+- **PR template** + **DCO check workflow** in `.github/`.
 
 ### Configuration
 
 - `EREBYX_API_KEY` (required)
+- `EREBYX_PASSPHRASE` (required for tenants registered at v0.1.1+ — Argon2id-default-on)
 - `EREBYX_API_URL` (default: `https://core.erebyx.com`)
 - `EREBYX_INSTANCE_ID` (default: `default` — same canonical tenant slice across CLI / SDK / extension; override for per-surface attribution)
 - `EREBYX_HINTS_DISABLED=1` — opt out of `X-Erebyx-Hint` parsing
@@ -71,11 +62,7 @@ See the [v0.2 roadmap](https://erebyx.com/docs/roadmap) for cadence.
 ## How to upgrade
 
 ```bash
-# Cargo install
 cargo install erebyx --force
-
-# Or via the npx wrapper (always pulls latest)
-npx @erebyx/install-mcp@latest
 ```
 
 Confirm: `erebyx --version`
