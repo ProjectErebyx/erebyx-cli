@@ -4,7 +4,7 @@
 //! Run:
 //!
 //! ```bash
-//! EREBYX_API_KEY=erebyx_... cargo run --example hello_world
+//! EREBYX_API_KEY=<YOUR_API_KEY> cargo run --example hello_world
 //! ```
 //!
 //! This example talks to the substrate's HTTP API directly using `reqwest`
@@ -84,7 +84,7 @@ async fn call_mcp_tool(
         .post(mcp_url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .header("X-API-Key", api_key)
+        .bearer_auth(api_key)
         .header("X-Instance-ID", instance_id)
         .json(&body)
         .send()

@@ -7,11 +7,12 @@ mod setup;
 use anyhow::Result;
 use clap::Parser;
 use serde_json::{json, Value};
+use std::env;
 use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
 use client::{session_id, ErebyxClient};
-use output::{print_error, print_response};
+use output::{print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
 async fn main() {
@@ -28,12 +29,43 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Health => {
-            let client = ErebyxClient::new()?;
-            let result = client.health().await?;
-            print_response(&result, false, json_mode);
+            // P1-1 (2026-05-27): the first cold-touch command must work
+            // BEFORE the customer has run `erebyx setup` or set
+            // EREBYX_API_KEY. If no key is configured, hit the substrate's
+            // unauthenticated /health route directly so the customer can
+            // confirm reachability without paying for an API key first.
+            if env::var("EREBYX_API_KEY").is_err() {
+                let result = ErebyxClient::health_anonymous(None).await?;
+                if json_mode {
+                    print_response(&result, false, json_mode);
+                } else {
+                    print_response(&result, false, json_mode);
+                    println!();
+                    println!(
+                        "  • no EREBYX_API_KEY configured — run `erebyx setup` to authenticate."
+                    );
+                }
+            } else {
+                let client = ErebyxClient::new()?;
+                let result = client.health().await?;
+                print_response(&result, false, json_mode);
+            }
         }
 
         Commands::Setup { api_key, api_url } => {
+            // P1-6 (2026-05-27): the `--api-key <key>` form lands the
+            // credential in shell history, ps auxww, and shell-completion
+            // logs. Warn loudly + point at the safer paths. We don't
+            // refuse — power users / CI scripts may need this — but we
+            // surface the risk so casual copy-pasters know.
+            if api_key.is_some() {
+                eprintln!("  ⚠ Reading API key from `--api-key` flag — the value lands in");
+                eprintln!("    shell history and `ps` output. Prefer one of:");
+                eprintln!("      EREBYX_API_KEY=<key> erebyx setup       (env var; ps-invisible)");
+                eprintln!(
+                    "      erebyx setup                            (interactive prompt; no echo)"
+                );
+            }
             setup::run_setup(api_key, api_url).await?;
         }
 
@@ -44,21 +76,21 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Doctor => {
             // Quick health check + client detection
             println!();
-            println!("  {} Checking Erebyx...", "•".to_string());
+            println!("  • Checking Erebyx...");
 
             // Check server
             match ErebyxClient::new() {
                 Ok(client) => match client.health().await {
-                    Ok(_) => println!("  {} Server: connected", "✓"),
-                    Err(e) => println!("  {} Server: {}", "✗", e),
+                    Ok(_) => println!("  ✓ Server: connected"),
+                    Err(e) => println!("  ✗ Server: {}", e),
                 },
-                Err(e) => println!("  {} Server: {} (set EREBYX_API_KEY)", "✗", e),
+                Err(e) => println!("  ✗ Server: {} (set EREBYX_API_KEY)", e),
             }
 
             // Check clients
             let clients = setup::detect::detect_clients();
             if clients.is_empty() {
-                println!("  {} No AI clients detected", "✗");
+                println!("  ✗ No AI clients detected");
             } else {
                 for client in &clients {
                     let status = if client.config_exists {
@@ -66,7 +98,7 @@ async fn run(cli: Cli) -> Result<()> {
                     } else {
                         format!("{} not configured (run `erebyx setup`)", "✗")
                     };
-                    println!("  {} {}: {}", "•", client.name, status);
+                    println!("  • {}: {}", client.name, status);
                 }
             }
             println!();
@@ -91,7 +123,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("restore_identity", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -109,7 +147,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("load_context", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -143,7 +187,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("save", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -181,7 +231,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("remember", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -215,7 +271,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("wrap_up", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -240,16 +302,73 @@ async fn run(cli: Cli) -> Result<()> {
 /// client never sees a hung pipe. Fatal errors (no API key, unreachable host)
 /// exit non-zero so the parent harness can report a launch failure.
 async fn mcp_serve() -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     let client = ErebyxClient::new()?;
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
 
-    while let Some(line) = reader.next_line().await? {
+    loop {
+        // P1-3 (2026-05-27): ride out transient I/O errors instead of
+        // killing the bridge. macOS Spaces switches / backgrounding can
+        // surface as Interrupted; only Ok(None) (clean EOF) or a hard
+        // error tears the loop down.
+        let line = match reader.next_line().await {
+            Ok(Some(l)) => l,
+            Ok(None) => break, // clean EOF
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.into()),
+        };
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+
+        // P0-B (2026-05-27, brutal-review POSTFIX_CLI): when the line
+        // fails to parse as JSON, JSON-RPC 2.0 §5.1 mandates a local
+        // Parse error response with code -32700 — NOT a round-trip to
+        // the substrate. The prior code sent the garbage upstream as
+        // an HTTP body and emitted code -32603 on the 4xx reply, which
+        // both wasted network and used the wrong error code.
+        let parsed: Option<Value> = serde_json::from_str(trimmed).ok();
+        if parsed.is_none() {
+            let err = json!({
+                "jsonrpc": "2.0",
+                "id": Value::Null,
+                "error": {
+                    "code": -32700,
+                    "message": "Parse error",
+                },
+            });
+            emit_jsonrpc(&mut stdout, &err).await?;
+            continue;
+        }
+        let parsed_value = parsed.as_ref().unwrap();
+
+        // P1-2 (2026-05-27): JSON-RPC 2.0 §4.1 — a Notification is a
+        // Request without an `id`; the server MUST NOT respond. MCP uses
+        // notifications for `notifications/cancelled` and
+        // `notifications/initialized` etc. Claude Code's MCP client
+        // treats spurious responses to notifications as protocol
+        // violations and disconnects. Detect + fire-and-forget.
+        // (Note: explicit `id: null` IS a request per §4.2, so we check
+        // key presence via `as_object().contains_key`, not `.get().is_none`.)
+        let is_notification = !parsed_value
+            .as_object()
+            .map(|o| o.contains_key("id"))
+            .unwrap_or(false);
+        if is_notification {
+            // Proxy upstream so the substrate sees the notification
+            // (e.g. `notifications/initialized` finishes the MCP handshake)
+            // but discard whatever the substrate sends back — spec says
+            // we MUST NOT echo a response. Log proxy failures to stderr
+            // so operators can diagnose handshake hangs (stderr is
+            // invisible to the MCP stream over stdio).
+            if let Err(e) = client.proxy_jsonrpc(trimmed).await {
+                eprintln!("erebyx mcp-serve: notification proxy failed: {e}");
+            }
             continue;
         }
 
@@ -257,9 +376,9 @@ async fn mcp_serve() -> Result<()> {
             Ok(v) => v,
             Err(e) => json!({
                 "jsonrpc": "2.0",
-                "id": serde_json::from_str::<Value>(trimmed)
-                    .ok()
-                    .and_then(|v| v.get("id").cloned())
+                "id": parsed_value
+                    .get("id")
+                    .cloned()
                     .unwrap_or(Value::Null),
                 "error": {
                     "code": -32603,
@@ -268,13 +387,44 @@ async fn mcp_serve() -> Result<()> {
             }),
         };
 
-        let serialized = serde_json::to_string(&response)?;
-        stdout.write_all(serialized.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+        emit_jsonrpc(&mut stdout, &response).await?
     }
 
     Ok(())
+}
+
+/// Serialize + emit a JSON-RPC value to stdout with newline + flush.
+///
+/// **P1-G (brutal-review POSTFIX_CLI, 2026-05-27):** stdout writes
+/// previously used `?`-propagation, which surfaced `BrokenPipe` as a
+/// non-zero exit. For a stdio bridge, BrokenPipe means the MCP client
+/// (Claude Code) has terminated — that's a clean shutdown signal, not
+/// an error. This helper maps BrokenPipe to a clean Ok(()) and bubbles
+/// the loop out via the caller's early-return so the bridge exits 0.
+async fn emit_jsonrpc(stdout: &mut tokio::io::Stdout, value: &Value) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let serialized = serde_json::to_string(value)?;
+
+    // Wrap each write so BrokenPipe → clean exit signal.
+    async fn write_or_broken(out: &mut tokio::io::Stdout, bytes: &[u8]) -> Result<bool> {
+        match out.write_all(bytes).await {
+            Ok(_) => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(true),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    if write_or_broken(stdout, serialized.as_bytes()).await? {
+        return Ok(()); // caller should break; we signal via subsequent broken writes
+    }
+    if write_or_broken(stdout, b"\n").await? {
+        return Ok(());
+    }
+    match stdout.flush().await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Native hook-inject handler for Claude Code UserPromptSubmit hook.
@@ -328,8 +478,24 @@ async fn run_hook_inject() -> String {
     }
     let lower = user_message.to_lowercase();
     let greetings = [
-        "hey", "hi", "hello", "thanks", "thank you", "bye", "ok", "yes", "no",
-        "sure", "cool", "nice", "got it", "sounds good", "okay", "yep", "nope", "alright",
+        "hey",
+        "hi",
+        "hello",
+        "thanks",
+        "thank you",
+        "bye",
+        "ok",
+        "yes",
+        "no",
+        "sure",
+        "cool",
+        "nice",
+        "got it",
+        "sounds good",
+        "okay",
+        "yep",
+        "nope",
+        "alright",
     ];
     if lower.len() < 30 && greetings.iter().any(|g| lower.starts_with(g)) {
         return empty;
@@ -343,8 +509,8 @@ async fn run_hook_inject() -> String {
         Ok(k) if !k.is_empty() => k,
         _ => return empty,
     };
-    let api_url = std::env::var("EREBYX_API_URL")
-        .unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+    let api_url =
+        std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
     // Build a quick HTTP client with 500ms hard timeout.
     let http = match reqwest::Client::builder()
@@ -361,7 +527,7 @@ async fn run_hook_inject() -> String {
     let response = match http
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("X-API-Key", &api_key)
+        .bearer_auth(&api_key)
         .header("X-Instance-ID", "default")
         .header("X-Erebyx-Session-Id", session_id())
         .json(&body)

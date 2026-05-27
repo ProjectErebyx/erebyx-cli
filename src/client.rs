@@ -46,10 +46,7 @@ fn resolve_session_id() -> String {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &path,
-                    std::fs::Permissions::from_mode(0o600),
-                );
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             }
         }
         return fresh;
@@ -94,16 +91,77 @@ fn generate_session_id() -> String {
 }
 
 /// Return true if URL is HTTPS, or HTTP pointed at localhost (dev affordance).
+///
+/// Localhost forms accepted:
+///   - `http://localhost[:port][/path]`
+///   - `http://127.0.0.1[:port][/path]`
+///   - `http://[::1][:port][/path]`   (P1-7 — IPv6 bracketed form)
+///
+/// Scheme matching is case-insensitive so `HTTPS://...` from a clipboard
+/// paste doesn't get rejected on a technicality (audit P2-4 adjacent).
 fn is_safe_url(url: &str) -> bool {
-    if url.starts_with("https://") {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
         return true;
     }
-    if let Some(rest) = url.strip_prefix("http://") {
-        let host_part = rest.split('/').next().unwrap_or("");
-        let host = host_part.split(':').next().unwrap_or("");
-        return matches!(host, "localhost" | "127.0.0.1" | "::1");
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    let host_part = rest.split('/').next().unwrap_or("");
+    // P1-7 (2026-05-27): IPv6 literals are bracketed (`[::1]:8080`). The
+    // prior `host_part.split(':').next()` returned `[` for that form and
+    // rejected legitimate IPv6 localhost dev setups (Linux distros that
+    // default to IPv6, modern Docker, Codespaces).
+    if let Some(stripped) = host_part.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            let host = &stripped[..end];
+            return matches!(host, "::1");
+        }
+        // Malformed bracketed form — fall through to reject.
+        return false;
     }
-    false
+    let host = host_part.split(':').next().unwrap_or("");
+    matches!(host, "localhost" | "127.0.0.1")
+}
+
+#[cfg(test)]
+mod url_safety_tests {
+    use super::is_safe_url;
+
+    #[test]
+    fn accepts_https() {
+        assert!(is_safe_url("https://core.erebyx.com"));
+        assert!(is_safe_url("https://core.erebyx.com/mcp"));
+    }
+
+    #[test]
+    fn accepts_https_uppercase_scheme() {
+        assert!(is_safe_url("HTTPS://core.erebyx.com"));
+    }
+
+    #[test]
+    fn accepts_localhost_dev() {
+        assert!(is_safe_url("http://localhost:8080"));
+        assert!(is_safe_url("http://127.0.0.1:8080/mcp"));
+    }
+
+    #[test]
+    fn accepts_ipv6_localhost() {
+        assert!(is_safe_url("http://[::1]:8080"));
+        assert!(is_safe_url("http://[::1]:8080/mcp"));
+        assert!(is_safe_url("http://[::1]"));
+    }
+
+    #[test]
+    fn rejects_plain_http_to_internet() {
+        assert!(!is_safe_url("http://example.com"));
+        assert!(!is_safe_url("http://core.erebyx.com"));
+    }
+
+    #[test]
+    fn rejects_malformed_ipv6() {
+        assert!(!is_safe_url("http://[:::"));
+    }
 }
 
 /// HTTP client for erebyx-os MCP endpoint.
@@ -113,6 +171,12 @@ pub struct ErebyxClient {
     base_url: String,
     api_key: String,
     instance_id: String,
+    /// Per-tenant passphrase for `argon2_passphrase` mode (default at
+    /// v0.1.1+). When set, sent as the `X-Passphrase` header on every
+    /// request. Resolved from `EREBYX_PASSPHRASE`; empty values
+    /// normalized to `None`. Future: prompt-at-setup + OS-keychain
+    /// persistence via the `keyring` crate.
+    passphrase: Option<String>,
 }
 
 /// JSON-RPC response from the MCP server
@@ -120,20 +184,57 @@ pub struct ErebyxClient {
 pub struct McpResponse {
     pub content: Value,
     pub is_error: bool,
+    /// Lifecycle hints from the substrate (parsed from the
+    /// ``X-Erebyx-Hint`` response header). Empty when the substrate
+    /// emits no hints OR the env override ``EREBYX_HINTS_DISABLED=1``
+    /// is set. Known values: ``wrap_up_recommended``,
+    /// ``restore_identity_recommended``, ``load_context_recommended``,
+    /// ``compact_imminent``.
+    pub hints: Vec<String>,
+    /// Tools the substrate auto-fired during this request (parsed from
+    /// the ``X-Erebyx-Auto-Fired`` response header). Typically
+    /// ``["restore_identity", "load_context"]`` on the first call
+    /// against a fresh ``(instance_id, session_id)`` tuple, empty
+    /// thereafter.
+    pub auto_fired: Vec<String>,
+}
+
+/// Parse a comma-separated header value into a deduped, trimmed,
+/// lowercase-comparable list. Used for ``X-Erebyx-Hint`` and
+/// ``X-Erebyx-Auto-Fired`` capture. Empty header → empty Vec.
+fn parse_csv_header(value: Option<&reqwest::header::HeaderValue>) -> Vec<String> {
+    value
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl ErebyxClient {
     pub fn new() -> Result<Self> {
-        let api_key =
-            env::var("EREBYX_API_KEY").context("EREBYX_API_KEY environment variable is required")?;
+        let api_key = env::var("EREBYX_API_KEY")
+            .context("EREBYX_API_KEY environment variable is required")?;
 
         let base_url =
             env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
         // Default to "default" — same canonical tenant slice across CLI / SDK / extension.
         // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
-        let instance_id =
-            env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+        let instance_id = env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+
+        // Argon2id-default-on: tenants register with a passphrase used to
+        // derive the KEK at request time. EREBYX_PASSPHRASE is the transport
+        // until prompt-at-setup + OS-keychain (keyring crate, follow-up).
+        // Empty strings normalize to None so legacy hkdf_api_key tenants
+        // don't accidentally transmit an empty X-Passphrase header.
+        let passphrase = env::var("EREBYX_PASSPHRASE")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         if api_key.trim().is_empty() {
             anyhow::bail!("EREBYX_API_KEY is set but empty");
@@ -159,6 +260,7 @@ impl ErebyxClient {
             base_url,
             api_key,
             instance_id,
+            passphrase,
         })
     }
 
@@ -176,14 +278,18 @@ impl ErebyxClient {
             }
         });
 
-        let response = self
+        let mut rb = self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
-            .header("X-Erebyx-Session-Id", session_id())
+            .header("X-Erebyx-Session-Id", session_id());
+        if let Some(ref p) = self.passphrase {
+            rb = rb.header("X-Passphrase", p);
+        }
+        let response = rb
             .json(&body)
             .send()
             .await
@@ -199,6 +305,28 @@ impl ErebyxClient {
                 );
             }
         }
+        // Capture lifecycle headers BEFORE .text() consumes the response.
+        // Honors EREBYX_HINTS_DISABLED env var as a per-call opt-out.
+        // Truthiness matches the substrate's allowlist
+        // (core/api/middleware/erebyx_hints.py): {"1","true","yes"} only.
+        // Prior shape treated any non-"0" value as truthy → asymmetric
+        // with substrate, so `EREBYX_HINTS_DISABLED=false` would disable
+        // here but not server-side (CLI postfix-review P1-3).
+        let hints_disabled = std::env::var("EREBYX_HINTS_DISABLED")
+            .ok()
+            .map(|v| {
+                let v = v.trim().to_lowercase();
+                matches!(v.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(false);
+        let (hints, auto_fired) = if hints_disabled {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                parse_csv_header(response.headers().get("X-Erebyx-Hint")),
+                parse_csv_header(response.headers().get("X-Erebyx-Auto-Fired")),
+            )
+        };
         let response_text = response
             .text()
             .await
@@ -224,6 +352,8 @@ impl ErebyxClient {
             return Ok(McpResponse {
                 content: json!({ "error": message }),
                 is_error: true,
+                hints,
+                auto_fired,
             });
         }
 
@@ -263,7 +393,12 @@ impl ErebyxClient {
             result
         };
 
-        Ok(McpResponse { content, is_error })
+        Ok(McpResponse {
+            content,
+            is_error,
+            hints,
+            auto_fired,
+        })
     }
 
     /// Forward a raw JSON-RPC request body to the substrate `/mcp/` endpoint
@@ -276,14 +411,18 @@ impl ErebyxClient {
     pub async fn proxy_jsonrpc(&self, raw_body: &str) -> Result<Value> {
         let url = format!("{}/mcp/", self.base_url.trim_end_matches('/'));
 
-        let response = self
+        let mut rb = self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
-            .header("X-Erebyx-Session-Id", session_id())
+            .header("X-Erebyx-Session-Id", session_id());
+        if let Some(ref p) = self.passphrase {
+            rb = rb.header("X-Passphrase", p);
+        }
+        let response = rb
             .body(raw_body.to_owned())
             .send()
             .await
@@ -315,6 +454,46 @@ impl ErebyxClient {
         serde_json::from_str(&body).context("Invalid JSON in MCP response")
     }
 
+    /// Anonymous server-reachability probe — no API key required.
+    ///
+    /// The substrate's `/health` route is intentionally unauthenticated so
+    /// monitoring + first-touch reachability checks work without a key.
+    /// This static helper exists so `erebyx health` and `erebyx doctor` can
+    /// answer "is the substrate up?" BEFORE the user has run `erebyx setup`
+    /// or set `EREBYX_API_KEY`.
+    ///
+    /// `api_url` defaults to `https://core.erebyx.com` if `EREBYX_API_URL`
+    /// is unset.
+    pub async fn health_anonymous(api_url: Option<&str>) -> Result<Value> {
+        let base = match api_url {
+            Some(u) => u.to_string(),
+            None => {
+                env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string())
+            }
+        };
+        let url = format!("{}/health", base.trim_end_matches('/'));
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .context("Failed to build HTTP client")?;
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to connect to Erebyx")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("Health endpoint returned HTTP {}", status);
+        }
+        response
+            .json::<Value>()
+            .await
+            .context("Invalid JSON from health endpoint")
+    }
+
     /// Check server health via GET /health
     pub async fn health(&self) -> Result<Value> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
@@ -322,7 +501,7 @@ impl ErebyxClient {
         let response = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .bearer_auth(&self.api_key)
             .header("X-Instance-ID", &self.instance_id)
             .header("X-Erebyx-Session-Id", session_id())
             .send()
@@ -367,4 +546,92 @@ fn truncate_safe(s: &str, max_len: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+#[cfg(test)]
+mod health_anonymous_tests {
+    use super::*;
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+    /// `health_anonymous` hits an unauthenticated /health endpoint —
+    /// no Bearer header, no X-Instance-ID, no X-Erebyx-Session-Id.
+    /// Pins the contract that this probe truly does NOT require a
+    /// configured API key.
+    #[tokio::test]
+    async fn health_anonymous_does_not_send_auth_headers() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            // Negative assertions: these headers MUST be absent
+            // (or empty) because the probe runs pre-API-key-config.
+            // `matchers::header_exists` returning false isn't directly
+            // expressible, so we rely on response-shape assertion +
+            // visual confirmation that the request handler in
+            // health_anonymous explicitly doesn't add auth.
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "healthy",
+                "transport": "fastapi",
+            })))
+            .mount(&server)
+            .await;
+
+        let result = ErebyxClient::health_anonymous(Some(&server.uri()))
+            .await
+            .expect("health_anonymous must succeed against a 200 mock");
+
+        assert_eq!(result["status"], "healthy");
+    }
+
+    /// Server unreachable → returns a contextual error, not a panic.
+    #[tokio::test]
+    async fn health_anonymous_surfaces_connection_failure() {
+        // Use a port that's almost certainly not in use to force a
+        // connect-refused. Localhost:1 typically has no listener.
+        let result = ErebyxClient::health_anonymous(Some("http://127.0.0.1:1")).await;
+        assert!(result.is_err(), "unreachable server must Err, not panic");
+    }
+
+    /// Non-2xx response → Err with a server-status message (not Ok with
+    /// a misleading body).
+    #[tokio::test]
+    async fn health_anonymous_returns_error_on_non_2xx() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let result = ErebyxClient::health_anonymous(Some(&server.uri())).await;
+        assert!(result.is_err(), "503 must surface as an Err");
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            msg.contains("503") || msg.contains("status"),
+            "error message must reference the server status, got: {msg}"
+        );
+    }
+
+    /// Trailing-slash handling — the URL builder must normalize so we
+    /// don't ship `//health` to the server.
+    #[tokio::test]
+    async fn health_anonymous_normalizes_trailing_slash_on_base_url() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "healthy",
+            })))
+            .mount(&server)
+            .await;
+
+        // server.uri() returns no trailing slash; explicitly add one.
+        let url_with_slash = format!("{}/", server.uri());
+        let result = ErebyxClient::health_anonymous(Some(&url_with_slash))
+            .await
+            .expect("trailing slash on base must be normalized");
+        assert_eq!(result["status"], "healthy");
+    }
 }

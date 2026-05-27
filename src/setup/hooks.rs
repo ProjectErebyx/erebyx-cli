@@ -10,7 +10,6 @@
 //! Timeout: 500ms hard limit (set inside `erebyx hook-inject`).
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 
 use super::detect::AiClient;
 
@@ -46,6 +45,26 @@ exec erebyx hook-inject 2>/dev/null || printf '%s' '{{}}'
 
 /// Install Claude Code hooks for automatic memory injection.
 pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result<()> {
+    // P1-4 (2026-05-27): the hook script uses bash + Unix path conventions.
+    // Claude Code on Windows doesn't invoke `.sh` files directly (it wants
+    // `.bat` / `.cmd` / `.ps1`). Pre-fix `erebyx setup` reported success on
+    // Windows while writing a script that never ran — customers thought
+    // hooks were installed and never received memory injection, with no
+    // error signal. v0.1.2 will ship the PowerShell variant; v0.1.1 punts
+    // cleanly with a clear message so the customer knows what landed and
+    // what didn't.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = api_url; // unused on this branch
+        let _ = client;
+        eprintln!(
+            "  ⚠ Claude Code hooks: Windows support is not yet implemented. \
+             The MCP server entry is still configured — `restore_identity` \
+             works manually. Hook-based auto-injection arrives in v0.1.2."
+        );
+        return Ok(());
+    }
+
     // Native hook handler — no python3 or external interpreter required.
 
     // Write the hook script
@@ -88,7 +107,7 @@ fn require_object(value: &serde_json::Value, config_path: &str, key_context: &st
 }
 
 /// Register the hook in Claude Code's settings.json.
-fn register_hook_in_settings(client: &AiClient, script_path: &PathBuf) -> Result<()> {
+fn register_hook_in_settings(client: &AiClient, script_path: &std::path::Path) -> Result<()> {
     let settings_path = &client.config_path; // ~/.claude/settings.json
 
     let mut config = if settings_path.exists() {
@@ -122,25 +141,30 @@ fn register_hook_in_settings(client: &AiClient, script_path: &PathBuf) -> Result
         .entry("UserPromptSubmit")
         .or_insert_with(|| serde_json::json!([]));
 
-    // Build and insert the hook entry
+    // Build and insert the hook entry with an explicit managed-marker so
+    // future re-runs only touch our own entries — not user-authored
+    // adjacent automation. P1-5 (2026-05-27): the prior substring filter
+    // (`c.contains("erebyx")`) would wipe ANY hook whose command mentioned
+    // erebyx (e.g. `~/bin/erebyx-archive-export`, custom helpers under
+    // `~/scripts/my-erebyx-extras.sh`). Customers writing their own
+    // erebyx-adjacent automation would lose it silently on the next
+    // `erebyx setup` run.
     let hook_entry = serde_json::json!({
         "type": "command",
-        "command": script_path.to_string_lossy()
+        "command": script_path.to_string_lossy(),
+        "_erebyx_managed": true
     });
 
     if let Some(arr) = user_prompt_hooks.as_array_mut() {
-        // Remove existing erebyx hooks before adding the current one
-        arr.retain(|h| {
-            !h.get("command")
-                .and_then(|c| c.as_str())
-                .map(|c| c.contains("erebyx"))
-                .unwrap_or(false)
-        });
+        // Retention precision via the extracted `should_remove_hook_entry`
+        // predicate. See its docstring (and unit tests at the bottom of
+        // this file) for the three-way match semantics.
+        arr.retain(|h| !should_remove_hook_entry(h));
         arr.push(hook_entry);
     }
 
-    let content = serde_json::to_string_pretty(&config)
-        .context("Failed to serialize settings JSON")?;
+    let content =
+        serde_json::to_string_pretty(&config).context("Failed to serialize settings JSON")?;
     std::fs::write(settings_path, content)
         .with_context(|| format!("Failed to write {}", settings_path.display()))?;
 
@@ -156,5 +180,126 @@ fn value_type_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// Pure predicate: should this existing hook entry be REMOVED before
+/// registering our managed entry?
+///
+/// Extracted from `register_hook_in_settings` so the precision contract
+/// can be tested directly. P1-5 (brutal-review POSTFIX_CLI CC-1) said
+/// "hook retention filter is a pure-function pass over a JSON array.
+/// Testable. Add tests."
+///
+/// Three-way match:
+///   1. Explicit `_erebyx_managed: true` marker (current canon).
+///   2. Exact-path match for `*/erebyx-memory-injector.sh` (back-compat
+///      with v0.1.0 installs that lack the flag).
+///   3. Exact `erebyx hook-inject` command (legacy invocation).
+///
+/// Anything else stays untouched.
+fn should_remove_hook_entry(entry: &serde_json::Value) -> bool {
+    let is_managed = entry
+        .get("_erebyx_managed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if is_managed {
+        return true;
+    }
+    let cmd = entry.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    cmd.ends_with("erebyx-memory-injector.sh") || cmd == "erebyx hook-inject"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // -------------------------------------------------------------
+    // should_remove_hook_entry — retention precision (P1-5)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn explicit_managed_marker_triggers_removal() {
+        let entry = json!({
+            "type": "command",
+            "command": "/anywhere/whatever.sh",
+            "_erebyx_managed": true,
+        });
+        assert!(should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn legacy_path_suffix_triggers_removal_without_marker() {
+        // Back-compat with v0.1.0 installs that lack the flag.
+        let entry = json!({
+            "type": "command",
+            "command": "/Users/mikey/.claude/hooks/erebyx-memory-injector.sh",
+        });
+        assert!(should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn legacy_exact_command_triggers_removal() {
+        let entry = json!({
+            "type": "command",
+            "command": "erebyx hook-inject",
+        });
+        assert!(should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn user_automation_mentioning_erebyx_is_preserved() {
+        // Pre-fix the substring filter `c.contains("erebyx")` would
+        // wipe this. Now we accept only exact-form matches.
+        for cmd in &[
+            "/Users/mikey/bin/erebyx-archive-export",
+            "/Users/mikey/scripts/my-erebyx-extras.sh",
+            "/usr/local/bin/erebyx-backup",
+            "erebyx --version && other-tool", // wraps in shell
+            "python /opt/erebyx-tools/sync.py",
+        ] {
+            let entry = json!({
+                "type": "command",
+                "command": cmd,
+            });
+            assert!(
+                !should_remove_hook_entry(&entry),
+                "user automation {cmd:?} must be preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn non_managed_unrelated_hooks_preserved() {
+        let entry = json!({
+            "type": "command",
+            "command": "echo hello",
+        });
+        assert!(!should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn entry_with_marker_false_is_not_managed() {
+        // _erebyx_managed: false is treated as "not ours" — only
+        // explicit true triggers removal.
+        let entry = json!({
+            "type": "command",
+            "command": "/some/path.sh",
+            "_erebyx_managed": false,
+        });
+        assert!(!should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn entry_missing_command_field_doesnt_panic() {
+        let entry = json!({"type": "command"});
+        assert!(!should_remove_hook_entry(&entry));
+    }
+
+    #[test]
+    fn entry_with_null_command_doesnt_panic() {
+        let entry = json!({"type": "command", "command": null});
+        assert!(!should_remove_hook_entry(&entry));
     }
 }

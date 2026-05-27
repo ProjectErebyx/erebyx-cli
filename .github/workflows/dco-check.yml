@@ -1,0 +1,22 @@
+# DCO sign-off check
+# Source-of-truth: monorepo docs/distribution/license-canon/dco-check.yml
+# Copied per carve-out repo to .github/workflows/dco-check.yml during license-canon migration.
+#
+# Enforces Developer Certificate of Origin sign-off on every commit in a PR.
+# Pattern: every commit body must contain `Signed-off-by: Name <email>` line.
+# Sign with: git commit -s -m "your message"
+
+name: DCO Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check DCO sign-off
+        uses: tim-actions/dco@v1.1.0
+        with:
+          commits: ${{ github.event.pull_request.commits }}

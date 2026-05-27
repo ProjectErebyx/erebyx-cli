@@ -4,7 +4,7 @@ version = "0.1.1"
 edition = "2021"
 rust-version = "1.75"
 description = "Connect any MCP-capable AI to your Erebyx memory substrate. Persistent memory across every AI you use. Native CLI binary; encrypted in transit and at rest server-side; client-side end-to-end encryption ships in v0.1.x."
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/ProjectErebyx/EREBYX-CLI"
 homepage = "https://erebyx.com"
 readme = "README.md"
@@ -30,3 +30,11 @@ chrono = "0.4"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 indicatif = "0.17"
 dirs = "5"
+
+[dev-dependencies]
+# tempfile = filesystem fixtures for is_within_git_tree tests.
+# wiremock = HTTP mock for health_anonymous + integration smoke.
+# serial_test = env-var-mutation tests must run sequentially.
+tempfile = "3"
+wiremock = "0.6"
+serial_test = "3"

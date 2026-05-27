@@ -19,14 +19,10 @@ use detect::{detect_clients, AiClient};
 /// Run the interactive setup flow.
 pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Result<()> {
     println!();
+    println!("{}", "  Erebyx setup — universal AI memory".bold().cyan());
     println!(
         "{}",
-        "  Erebyx setup — universal AI memory".bold().cyan()
-    );
-    println!(
-        "{}",
-        "  Install persistent memory across all your AI tools."
-            .dimmed()
+        "  Install persistent memory across all your AI tools.".dimmed()
     );
     println!();
 
@@ -36,16 +32,17 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     spinner.finish_and_clear();
 
     if clients.is_empty() {
-        println!(
-            "{}",
-            "  No supported AI clients detected.".yellow()
-        );
+        println!("{}", "  No supported AI clients detected.".yellow());
         println!("  Supported: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot");
         println!("  Install one of these and run `erebyx setup` again.");
         return Ok(());
     }
 
-    println!("  {} Detected {} client(s):", "✓".green().bold(), clients.len());
+    println!(
+        "  {} Detected {} client(s):",
+        "✓".green().bold(),
+        clients.len()
+    );
     for client in &clients {
         let status = if client.config_exists {
             "(already configured)".dimmed().to_string()
@@ -62,7 +59,10 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
         None => {
             let env_key = std::env::var("EREBYX_API_KEY").ok();
             if let Some(key) = env_key {
-                println!("  {} Using EREBYX_API_KEY from environment", "✓".green().bold());
+                println!(
+                    "  {} Using EREBYX_API_KEY from environment",
+                    "✓".green().bold()
+                );
                 key
             } else {
                 // Mask input — API keys must never land in terminal scrollback or shell history.

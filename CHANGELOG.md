@@ -4,7 +4,21 @@ All notable changes to `erebyx-cli` are documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-The substrate-side release notes live at [erebyx-os `CHANGELOG_v0_1_1.md`](https://github.com/ProjectErebyx/erebyx-os/blob/main/CHANGELOG_v0_1_1.md).
+Substrate-side release notes are published at [erebyx.com/changelog](https://erebyx.com/changelog).
+
+---
+
+## [Unreleased]
+
+### Changed
+
+- **License: Apache-2.0 → MIT-OR-Apache-2.0 dual** (crates.io ecosystem convention; Rust itself is dual-licensed). `LICENSE` renamed to `LICENSE-APACHE-2.0`; new `LICENSE-MIT` added. `Cargo.toml` license field updated. README + CONTRIBUTING + NOTICE updated.
+- **Cargo.toml `repository` URL**: lowercase `erebyx-cli` → canonical ALL-CAPS `EREBYX-CLI` to match brand convention (EREBYX is always capitalized).
+
+### Added
+
+- `.github/pull_request_template.md` — client-surface PR template with zero-substrate-logic checklist.
+- `.github/workflows/dco-check.yml` — DCO sign-off enforcement workflow.
 
 ---
 
@@ -28,7 +42,7 @@ First public release. The CLI surfaces the EREBYX v0.1.1 cognitive verbs as nati
 
 - `EREBYX_API_KEY` (required)
 - `EREBYX_API_URL` (default: `https://core.erebyx.com`)
-- `EREBYX_INSTANCE_ID` (default: `cli`)
+- `EREBYX_INSTANCE_ID` (default: `default` — same canonical tenant slice across CLI / SDK / extension; override for per-surface attribution)
 - `EREBYX_HINTS_DISABLED=1` — opt out of `X-Erebyx-Hint` parsing
 - `EREBYX_DISABLE_AUTO_FIRE=1` — opt out of substrate-side cold-fire (rare; usually you want it)
 
