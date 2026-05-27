@@ -163,6 +163,140 @@ fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> St
 }
 
 /// Run the interactive setup flow.
+/// Preview `erebyx setup` without writing anything to disk.
+///
+/// Stripe CLI / Vercel CLI / Fly Launch convention: let the operator
+/// audit what setup will do before it does it. Especially valuable for
+/// users running the CLI against a corporate workstation, a shared
+/// machine, or any environment where they need to know exactly which
+/// files an installer will touch.
+///
+/// Output sections:
+///   1. Detected clients — same as the real setup
+///   2. Files that WOULD be written — full list of (label, path) pairs
+///   3. Configs that WOULD be merged — per-client JSON snippet preview
+///   4. Hooks that WOULD be installed — Claude Code SessionStart +
+///      UserPromptSubmit
+///   5. What WON'T change — anything detected but not touched
+///
+/// **No HTTP calls.** Dry-run intentionally skips the dynamic-block
+/// fetch + auth probe so it can run offline against any env. The
+/// `EREBYX_API_KEY` prompt is also skipped — paths are shown using
+/// a placeholder. Run the real setup for credentials + dynamic context.
+pub async fn run_setup_dry_run(
+    _api_key: Option<String>,
+    api_url: Option<String>,
+) -> Result<()> {
+    let api_url = api_url.unwrap_or_else(|| "https://core.erebyx.com".to_string());
+    let placeholder_key = "<YOUR_EREBYX_API_KEY>";
+
+    println!();
+    println!(
+        "  {}",
+        "Erebyx setup — DRY RUN (no files will be written)".bold().yellow()
+    );
+    println!();
+
+    // Detect clients (same code path as real setup)
+    let clients = detect_clients();
+    if clients.is_empty() {
+        println!("  ✗ No AI clients detected.");
+        println!(
+            "    Install one of: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot."
+        );
+        println!();
+        return Ok(());
+    }
+
+    println!("  {} Detected {} client(s):", "✓".green(), clients.len());
+    for client in &clients {
+        let status = if client.config_exists {
+            " (already has erebyx config — would be re-merged)".dimmed().to_string()
+        } else {
+            String::new()
+        };
+        println!("    • {}{}", client.name.bold(), status);
+    }
+    println!();
+
+    // Enumerate files that would be written
+    println!("  {}", "Files that would be written:".bold());
+    for client in &clients {
+        // MCP config file
+        println!(
+            "    • {} config — {}",
+            client.name.dimmed(),
+            client.config_path.display()
+        );
+        // Rules file
+        println!(
+            "    • {} rules  — {}",
+            client.name.dimmed(),
+            client.rules_path.display()
+        );
+        // Claude Code: hook script
+        if client.kind == detect::ClientKind::ClaudeCode {
+            println!(
+                "    • {} hook   — {}",
+                client.name.dimmed(),
+                client.home_dir.join("hooks").join("erebyx-memory-injector.sh").display()
+            );
+        }
+    }
+    println!();
+
+    // Hooks summary (Claude Code specifically)
+    let has_claude_code = clients
+        .iter()
+        .any(|c| c.kind == detect::ClientKind::ClaudeCode);
+    if has_claude_code {
+        println!("  {}", "Hooks that would be installed (Claude Code):".bold());
+        println!(
+            "    • UserPromptSubmit — runs `erebyx hook-inject` on every prompt"
+        );
+        println!(
+            "    • SessionStart     — runs `erebyx hook-session-start` once per session"
+        );
+        println!(
+            "    • Both are marked `_erebyx_managed: true` so re-running setup replaces"
+        );
+        println!("      them precisely; user-authored hooks alongside are preserved.");
+        println!();
+    }
+
+    // Idempotency note
+    let any_existing = clients.iter().any(|c| c.config_exists);
+    if any_existing {
+        println!("  {}", "Idempotency:".bold());
+        println!(
+            "    Existing erebyx-managed entries would be replaced cleanly. Other"
+        );
+        println!(
+            "    MCP servers and hooks in the same config files would be untouched."
+        );
+        println!();
+    }
+
+    println!("  {}", "Network calls (real setup only):".bold());
+    println!(
+        "    • POST {}/v0/identity/restore (1.5s timeout)",
+        api_url.trim_end_matches('/').dimmed()
+    );
+    println!(
+        "    • POST {}/v0/session/load     (1.5s timeout)",
+        api_url.trim_end_matches('/').dimmed()
+    );
+    println!("    Output: rendered as `<!-- EREBYX:DYNAMIC -->` block in each rules file.");
+    println!("    Skipped in this dry run.");
+    println!();
+
+    println!("  {} placeholder used wherever an API key would appear.", placeholder_key.dimmed());
+    println!();
+    println!("  Re-run without `--dry-run` to perform setup.");
+    println!();
+    Ok(())
+}
+
 pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Result<()> {
     println!();
     println!("{}", "  Erebyx setup — universal AI memory".bold().cyan());

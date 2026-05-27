@@ -52,7 +52,11 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Commands::Setup { api_key, api_url } => {
+        Commands::Setup {
+            api_key,
+            api_url,
+            dry_run,
+        } => {
             // P1-6 (2026-05-27): the `--api-key <key>` form lands the
             // credential in shell history, ps auxww, and shell-completion
             // logs. Warn loudly + point at the safer paths. We don't
@@ -66,7 +70,11 @@ async fn run(cli: Cli) -> Result<()> {
                     "      erebyx setup                            (interactive prompt; no echo)"
                 );
             }
-            setup::run_setup(api_key, api_url).await?;
+            if dry_run {
+                setup::run_setup_dry_run(api_key, api_url).await?;
+            } else {
+                setup::run_setup(api_key, api_url).await?;
+            }
         }
 
         Commands::HookInject => {
