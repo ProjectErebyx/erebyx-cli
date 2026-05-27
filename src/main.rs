@@ -54,6 +54,25 @@ async fn run(cli: Cli) -> Result<()> {
         }
 
         Commands::Setup { api_key, api_url } => {
+            // P1-6 (2026-05-27): the `--api-key <key>` form lands the
+            // credential in shell history, ps auxww, and shell-completion
+            // logs. Warn loudly + point at the safer paths. We don't
+            // refuse — power users / CI scripts may need this — but we
+            // surface the risk so casual copy-pasters know.
+            if api_key.is_some() {
+                eprintln!(
+                    "  ⚠ Reading API key from `--api-key` flag — the value lands in"
+                );
+                eprintln!(
+                    "    shell history and `ps` output. Prefer one of:"
+                );
+                eprintln!(
+                    "      EREBYX_API_KEY=<key> erebyx setup       (env var; ps-invisible)"
+                );
+                eprintln!(
+                    "      erebyx setup                            (interactive prompt; no echo)"
+                );
+            }
             setup::run_setup(api_key, api_url).await?;
         }
 

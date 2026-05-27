@@ -94,16 +94,77 @@ fn generate_session_id() -> String {
 }
 
 /// Return true if URL is HTTPS, or HTTP pointed at localhost (dev affordance).
+///
+/// Localhost forms accepted:
+///   - `http://localhost[:port][/path]`
+///   - `http://127.0.0.1[:port][/path]`
+///   - `http://[::1][:port][/path]`   (P1-7 — IPv6 bracketed form)
+///
+/// Scheme matching is case-insensitive so `HTTPS://...` from a clipboard
+/// paste doesn't get rejected on a technicality (audit P2-4 adjacent).
 fn is_safe_url(url: &str) -> bool {
-    if url.starts_with("https://") {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
         return true;
     }
-    if let Some(rest) = url.strip_prefix("http://") {
-        let host_part = rest.split('/').next().unwrap_or("");
-        let host = host_part.split(':').next().unwrap_or("");
-        return matches!(host, "localhost" | "127.0.0.1" | "::1");
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    let host_part = rest.split('/').next().unwrap_or("");
+    // P1-7 (2026-05-27): IPv6 literals are bracketed (`[::1]:8080`). The
+    // prior `host_part.split(':').next()` returned `[` for that form and
+    // rejected legitimate IPv6 localhost dev setups (Linux distros that
+    // default to IPv6, modern Docker, Codespaces).
+    if let Some(stripped) = host_part.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            let host = &stripped[..end];
+            return matches!(host, "::1");
+        }
+        // Malformed bracketed form — fall through to reject.
+        return false;
     }
-    false
+    let host = host_part.split(':').next().unwrap_or("");
+    matches!(host, "localhost" | "127.0.0.1")
+}
+
+#[cfg(test)]
+mod url_safety_tests {
+    use super::is_safe_url;
+
+    #[test]
+    fn accepts_https() {
+        assert!(is_safe_url("https://core.erebyx.com"));
+        assert!(is_safe_url("https://core.erebyx.com/mcp"));
+    }
+
+    #[test]
+    fn accepts_https_uppercase_scheme() {
+        assert!(is_safe_url("HTTPS://core.erebyx.com"));
+    }
+
+    #[test]
+    fn accepts_localhost_dev() {
+        assert!(is_safe_url("http://localhost:8080"));
+        assert!(is_safe_url("http://127.0.0.1:8080/mcp"));
+    }
+
+    #[test]
+    fn accepts_ipv6_localhost() {
+        assert!(is_safe_url("http://[::1]:8080"));
+        assert!(is_safe_url("http://[::1]:8080/mcp"));
+        assert!(is_safe_url("http://[::1]"));
+    }
+
+    #[test]
+    fn rejects_plain_http_to_internet() {
+        assert!(!is_safe_url("http://example.com"));
+        assert!(!is_safe_url("http://core.erebyx.com"));
+    }
+
+    #[test]
+    fn rejects_malformed_ipv6() {
+        assert!(!is_safe_url("http://[:::"));
+    }
 }
 
 /// HTTP client for erebyx-os MCP endpoint.
