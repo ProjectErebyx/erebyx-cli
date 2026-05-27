@@ -12,7 +12,7 @@
 
 ```bash
 cargo install erebyx                  # native CLI binary
-export EREBYX_API_KEY="erebyx_..."    # get one at https://app.erebyx.com/keys
+export EREBYX_API_KEY="<YOUR_API_KEY>"    # get one at https://app.erebyx.com/keys
 erebyx setup                          # auto-detects every MCP-capable AI on your machine
 erebyx save "Anchor-based retrieval improves recall by 40%" --category insight
 erebyx remember "anchor retrieval"
@@ -57,7 +57,7 @@ erebyx setup
 # Restart Claude Code
 ```
 
-See [examples/hooks/claude-code/](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/claude-code/README.md)
+See [examples/hooks/claude-code/](https://erebyx.com/docs/integrations/claude-code)
 
 </td>
 <td>
@@ -70,7 +70,7 @@ erebyx setup
 # Restart Cursor
 ```
 
-See [examples/hooks/cursor/](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/cursor/README.md)
+See [examples/hooks/cursor/](https://erebyx.com/docs/integrations/cursor)
 
 </td>
 <td>
@@ -81,7 +81,7 @@ erebyx setup
 # Walks API key + config
 ```
 
-Or call the HTTP API directly: see [examples/hooks/raw-http/](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/raw-http/README.md)
+Or call the HTTP API directly: see [examples/hooks/raw-http/](https://erebyx.com/docs/integrations/raw-http)
 
 </td>
 </tr>
@@ -100,7 +100,7 @@ For every detected client, the setup writer drops an MCP server entry pointing a
       "command": "/usr/local/bin/erebyx",
       "args": ["mcp-serve"],
       "env": {
-        "EREBYX_API_KEY": "erebyx_...",
+        "EREBYX_API_KEY": "<YOUR_API_KEY>",
         "EREBYX_API_URL": "https://core.erebyx.com",
         "EREBYX_INSTANCE_ID": "default"
       }
@@ -117,7 +117,7 @@ For every detected client, the setup writer drops an MCP server entry pointing a
 
 ```bash
 # Required
-export EREBYX_API_KEY="erebyx_..."
+export EREBYX_API_KEY="<YOUR_API_KEY>"
 
 # Optional (defaults shown)
 export EREBYX_API_URL="https://core.erebyx.com"
@@ -210,7 +210,7 @@ src/
 The CLI calls the MCP HTTP endpoint at `${EREBYX_API_URL}/mcp/` using JSON-RPC. Each command maps to one MCP tool call. Health uses `GET /health` directly. `mcp-serve` reads JSON-RPC on stdin and forwards verbatim to the same `/mcp/` endpoint, so AI clients can speak MCP stdio while the substrate stays HTTPS-only.
 
 ### Headers on every request
-- `Authorization: Bearer <api_key>` — authentication (substrate-canonical Bearer form; the legacy `X-API-Key` form was retired Day 13 of Genesis Arche sprint per PR #779)
+- `Authorization: Bearer <api_key>` — authentication (canonical Bearer form)
 - `X-Instance-ID` — multi-tenant routing
 - `X-Erebyx-Session-Id` — stable per-install id (override with `EREBYX_SESSION_ID`)
 - `Content-Type: application/json`
@@ -244,7 +244,7 @@ cargo build --release
 - [`@erebyx/sdk`](https://github.com/ProjectErebyx/erebyx-sdk-node) — Node.js / TypeScript SDK
 - [`erebyx-extension`](https://github.com/ProjectErebyx/erebyx-extension) — browser extension for ChatGPT + Claude.ai
 - [Substrate docs](https://erebyx.com/docs)
-- [Per-harness integration examples](https://github.com/ProjectErebyx/erebyx-os/tree/main/examples/hooks) — 11 harnesses, copy-paste integration
+- [Per-harness integration examples](https://erebyx.com/docs/integrations) — 11 harnesses, copy-paste integration
 
 ---
 

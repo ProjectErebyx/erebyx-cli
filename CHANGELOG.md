@@ -4,7 +4,7 @@ All notable changes to `erebyx-cli` are documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-The substrate-side release notes live at [erebyx-os `CHANGELOG_v0_1_1.md`](https://github.com/ProjectErebyx/erebyx-os/blob/main/CHANGELOG_v0_1_1.md).
+Substrate-side release notes are published at [erebyx.com/changelog](https://erebyx.com/changelog).
 
 ---
 
@@ -12,12 +12,12 @@ The substrate-side release notes live at [erebyx-os `CHANGELOG_v0_1_1.md`](https
 
 ### Changed
 
-- **License: Apache-2.0 → MIT-OR-Apache-2.0 dual** per locked canon 2026-05-07 (crates.io ecosystem convention; Rust itself is dual-licensed). `LICENSE` renamed to `LICENSE-APACHE-2.0`; new `LICENSE-MIT` added. `Cargo.toml` license field updated. README + CONTRIBUTING + NOTICE updated. Source-of-truth: `erebyx-monorepo/docs/distribution/license-canon/README.md` §4.1.
-- **Cargo.toml `repository` URL**: lowercase `erebyx-cli` → canonical ALL-CAPS `EREBYX-CLI` per ADR-0003 + Mikey "EREBYX always capitalized" lock 2026-05-07.
+- **License: Apache-2.0 → MIT-OR-Apache-2.0 dual** (crates.io ecosystem convention; Rust itself is dual-licensed). `LICENSE` renamed to `LICENSE-APACHE-2.0`; new `LICENSE-MIT` added. `Cargo.toml` license field updated. README + CONTRIBUTING + NOTICE updated.
+- **Cargo.toml `repository` URL**: lowercase `erebyx-cli` → canonical ALL-CAPS `EREBYX-CLI` to match brand convention (EREBYX is always capitalized).
 
 ### Added
 
-- `.github/pull_request_template.md` — carve-out PR template with zero-substrate-logic checklist (load-bearing patent defense per Lock 12+28+42).
+- `.github/pull_request_template.md` — client-surface PR template with zero-substrate-logic checklist.
 - `.github/workflows/dco-check.yml` — DCO sign-off enforcement workflow.
 
 ---

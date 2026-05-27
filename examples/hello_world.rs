@@ -4,7 +4,7 @@
 //! Run:
 //!
 //! ```bash
-//! EREBYX_API_KEY=erebyx_... cargo run --example hello_world
+//! EREBYX_API_KEY=<YOUR_API_KEY> cargo run --example hello_world
 //! ```
 //!
 //! This example talks to the substrate's HTTP API directly using `reqwest`

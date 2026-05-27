@@ -35,7 +35,7 @@ erebyx health       # checks server + key
 ## 2. Configure (10 seconds)
 
 ```bash
-export EREBYX_API_KEY="erebyx_..."
+export EREBYX_API_KEY="<YOUR_API_KEY>"
 ```
 
 Optional overrides (rarely needed):
@@ -164,16 +164,16 @@ For ambiguous errors, run `erebyx doctor` — it audits your config across every
 
 The CLI is one of several integration paths. For your specific harness, see the matching example in the substrate repo:
 
-- [Claude Code](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/claude-code/README.md) — full lifecycle hooks, paste-the-JSON setup
-- [Cursor](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/cursor/README.md) — `.cursor/mcp.json` entry, hints automatic
-- [Anthropic Agent SDK](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/anthropic-agent-sdk/README.md) — raw tool-use loop
-- [OpenAI Responses API](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/openai-responses-api/README.md) — raw API integration
-- [Letta](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/letta/README.md) — agent self-decides cadence
-- [LangGraph](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/langgraph/README.md) — graph node lifecycle
-- [AutoGen](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/autogen/README.md) — multi-agent message events
-- [CrewAI](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/crewai/README.md) — role-based agent lifecycle
-- [Raw HTTP / curl](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/raw-http/README.md) — single-line save loop
-- [Future / unknown harness](https://github.com/ProjectErebyx/erebyx-os/blob/main/examples/hooks/future-harness/README.md) — protocol-level forward-compat
+- [Claude Code](https://erebyx.com/docs/integrations/claude-code) — full lifecycle hooks, paste-the-JSON setup
+- [Cursor](https://erebyx.com/docs/integrations/cursor) — `.cursor/mcp.json` entry, hints automatic
+- [Anthropic Agent SDK](https://erebyx.com/docs/integrations/anthropic-agent-sdk) — raw tool-use loop
+- [OpenAI Responses API](https://erebyx.com/docs/integrations/openai-responses-api) — raw API integration
+- [Letta](https://erebyx.com/docs/integrations/letta) — agent self-decides cadence
+- [LangGraph](https://erebyx.com/docs/integrations/langgraph) — graph node lifecycle
+- [AutoGen](https://erebyx.com/docs/integrations/autogen) — multi-agent message events
+- [CrewAI](https://erebyx.com/docs/integrations/crewai) — role-based agent lifecycle
+- [Raw HTTP / curl](https://erebyx.com/docs/integrations/raw-http) — single-line save loop
+- [Future / unknown harness](https://erebyx.com/docs/integrations/future-harness) — protocol-level forward-compat
 
 All examples honor the same `X-Erebyx-Hint` protocol described above.
 
