@@ -210,26 +210,30 @@ mod tests {
 
     /// Token-budget gate: RULES_CONTENT is loaded into the effective system
     /// prompt on EVERY conversation in EVERY configured client. This test
-    /// uses the cl100k_base 4-char-per-token heuristic (lower bound; real
-    /// tiktoken count is typically within ±10%). Budget = 400 tokens; below
-    /// that is silent encouragement, above that is system-prompt bloat.
-    /// Measured at branch creation: 352 tokens (cl100k_base, tiktoken).
-    /// 400-token ceiling leaves ~50 tokens of headroom for future hint
-    /// protocol additions before we cross into bloat territory.
+    /// uses a chars/4 heuristic that approximates cl100k_base.
+    ///
+    /// Measured 2026-05-27 LATE (brutal-review wave-2):
+    ///   chars: 1945, char-proxy estimate: 486, real cl100k_base: 431
+    ///   ratio: cl100k ≈ 89% of char-proxy
+    ///
+    /// Budget = 500 char-proxy tokens ≈ ~445 real cl100k tokens.
+    /// Current usage: 97% of char-proxy budget.
+    ///
+    /// **If you add to RULES_CONTENT:** plan ~12 chars per cl100k token,
+    /// not 4. We're close enough to the ceiling that an additional
+    /// instructional sentence will push past unless you trim elsewhere.
     #[test]
     fn rules_content_under_token_budget() {
-        // Char-based proxy that approximates cl100k_base. Real tiktoken
-        // count for the same content runs ~88% of this proxy (validated
-        // 2026-05-27 stress-test on 4 variants from 112 to 352 tokens).
         let char_count = RULES_CONTENT.len();
         let token_est = char_count / 4;
         assert!(
             token_est < 500,
-            "RULES_CONTENT char count {} ≈ {} tokens; budget is 500 (cl100k_base ≈ {} actual). \
-             Either trim the content or raise the budget after a stress-test pass.",
+            "RULES_CONTENT char count {} ≈ {} char-proxy tokens \
+             (cl100k_base ≈ {} actual). Budget 500. Either trim content \
+             or raise budget after a stress-test pass.",
             char_count,
             token_est,
-            (token_est as f64 * 0.88) as usize,
+            (token_est as f64 * 0.89) as usize,
         );
     }
 
