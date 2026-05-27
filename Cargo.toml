@@ -30,3 +30,11 @@ chrono = "0.4"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 indicatif = "0.17"
 dirs = "5"
+
+[dev-dependencies]
+# tempfile = filesystem fixtures for is_within_git_tree tests.
+# wiremock = HTTP mock for health_anonymous + integration smoke.
+# serial_test = env-var-mutation tests must run sequentially.
+tempfile = "3"
+wiremock = "0.6"
+serial_test = "3"

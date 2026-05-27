@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 use colored::Colorize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Print the response from an MCP tool call.
 /// In JSON mode, prints raw JSON. Otherwise, prints colored terminal output.
@@ -34,7 +34,10 @@ pub fn print_response_with_hints(
         // bare-content shape when no hints — keep the envelope only
         // when there's something to add.
         if hints.is_empty() && auto_fired.is_empty() {
-            println!("{}", serde_json::to_string_pretty(content).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(content).unwrap_or_default()
+            );
             return;
         }
         let mut envelope = match content {
@@ -54,7 +57,10 @@ pub fn print_response_with_hints(
                     .or_insert_with(|| json!(auto_fired));
             }
         }
-        println!("{}", serde_json::to_string_pretty(&envelope).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).unwrap_or_default()
+        );
         return;
     }
 
@@ -69,7 +75,11 @@ pub fn print_response_with_hints(
         eprintln!("{} {}", "hint:".dimmed(), hints.join(", ").dimmed());
     }
     if !auto_fired.is_empty() {
-        eprintln!("{} {}", "auto-fired:".dimmed(), auto_fired.join(", ").dimmed());
+        eprintln!(
+            "{} {}",
+            "auto-fired:".dimmed(),
+            auto_fired.join(", ").dimmed()
+        );
     }
 }
 

@@ -42,8 +42,7 @@ async fn run(cli: Cli) -> Result<()> {
                     print_response(&result, false, json_mode);
                     println!();
                     println!(
-                        "  {} no EREBYX_API_KEY configured — run `erebyx setup` to authenticate.",
-                        "•"
+                        "  • no EREBYX_API_KEY configured — run `erebyx setup` to authenticate."
                     );
                 }
             } else {
@@ -60,15 +59,9 @@ async fn run(cli: Cli) -> Result<()> {
             // refuse — power users / CI scripts may need this — but we
             // surface the risk so casual copy-pasters know.
             if api_key.is_some() {
-                eprintln!(
-                    "  ⚠ Reading API key from `--api-key` flag — the value lands in"
-                );
-                eprintln!(
-                    "    shell history and `ps` output. Prefer one of:"
-                );
-                eprintln!(
-                    "      EREBYX_API_KEY=<key> erebyx setup       (env var; ps-invisible)"
-                );
+                eprintln!("  ⚠ Reading API key from `--api-key` flag — the value lands in");
+                eprintln!("    shell history and `ps` output. Prefer one of:");
+                eprintln!("      EREBYX_API_KEY=<key> erebyx setup       (env var; ps-invisible)");
                 eprintln!(
                     "      erebyx setup                            (interactive prompt; no echo)"
                 );
@@ -83,21 +76,21 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Doctor => {
             // Quick health check + client detection
             println!();
-            println!("  {} Checking Erebyx...", "•".to_string());
+            println!("  • Checking Erebyx...");
 
             // Check server
             match ErebyxClient::new() {
                 Ok(client) => match client.health().await {
-                    Ok(_) => println!("  {} Server: connected", "✓"),
-                    Err(e) => println!("  {} Server: {}", "✗", e),
+                    Ok(_) => println!("  ✓ Server: connected"),
+                    Err(e) => println!("  ✗ Server: {}", e),
                 },
-                Err(e) => println!("  {} Server: {} (set EREBYX_API_KEY)", "✗", e),
+                Err(e) => println!("  ✗ Server: {} (set EREBYX_API_KEY)", e),
             }
 
             // Check clients
             let clients = setup::detect::detect_clients();
             if clients.is_empty() {
-                println!("  {} No AI clients detected", "✗");
+                println!("  ✗ No AI clients detected");
             } else {
                 for client in &clients {
                     let status = if client.config_exists {
@@ -105,7 +98,7 @@ async fn run(cli: Cli) -> Result<()> {
                     } else {
                         format!("{} not configured (run `erebyx setup`)", "✗")
                     };
-                    println!("  {} {}: {}", "•", client.name, status);
+                    println!("  • {}: {}", client.name, status);
                 }
             }
             println!();
@@ -130,7 +123,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("restore_identity", args).await?;
-            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -148,7 +147,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("load_context", args).await?;
-            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -182,7 +187,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("save", args).await?;
-            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -220,7 +231,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("remember", args).await?;
-            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -254,7 +271,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("wrap_up", args).await?;
-            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
+            print_response_with_hints(
+                &resp.content,
+                resp.is_error,
+                json_mode,
+                &resp.hints,
+                &resp.auto_fired,
+            );
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -319,9 +342,7 @@ async fn mcp_serve() -> Result<()> {
                     "message": "Parse error",
                 },
             });
-            if let Err(e) = emit_jsonrpc(&mut stdout, &err).await {
-                return Err(e);
-            }
+            emit_jsonrpc(&mut stdout, &err).await?;
             continue;
         }
         let parsed_value = parsed.as_ref().unwrap();
@@ -366,9 +387,7 @@ async fn mcp_serve() -> Result<()> {
             }),
         };
 
-        if let Err(e) = emit_jsonrpc(&mut stdout, &response).await {
-            return Err(e);
-        }
+        emit_jsonrpc(&mut stdout, &response).await?
     }
 
     Ok(())
@@ -382,18 +401,12 @@ async fn mcp_serve() -> Result<()> {
 /// (Claude Code) has terminated — that's a clean shutdown signal, not
 /// an error. This helper maps BrokenPipe to a clean Ok(()) and bubbles
 /// the loop out via the caller's early-return so the bridge exits 0.
-async fn emit_jsonrpc(
-    stdout: &mut tokio::io::Stdout,
-    value: &Value,
-) -> Result<()> {
+async fn emit_jsonrpc(stdout: &mut tokio::io::Stdout, value: &Value) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     let serialized = serde_json::to_string(value)?;
 
     // Wrap each write so BrokenPipe → clean exit signal.
-    async fn write_or_broken(
-        out: &mut tokio::io::Stdout,
-        bytes: &[u8],
-    ) -> Result<bool> {
+    async fn write_or_broken(out: &mut tokio::io::Stdout, bytes: &[u8]) -> Result<bool> {
         match out.write_all(bytes).await {
             Ok(_) => Ok(false),
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(true),
@@ -465,8 +478,24 @@ async fn run_hook_inject() -> String {
     }
     let lower = user_message.to_lowercase();
     let greetings = [
-        "hey", "hi", "hello", "thanks", "thank you", "bye", "ok", "yes", "no",
-        "sure", "cool", "nice", "got it", "sounds good", "okay", "yep", "nope", "alright",
+        "hey",
+        "hi",
+        "hello",
+        "thanks",
+        "thank you",
+        "bye",
+        "ok",
+        "yes",
+        "no",
+        "sure",
+        "cool",
+        "nice",
+        "got it",
+        "sounds good",
+        "okay",
+        "yep",
+        "nope",
+        "alright",
     ];
     if lower.len() < 30 && greetings.iter().any(|g| lower.starts_with(g)) {
         return empty;
@@ -480,8 +509,8 @@ async fn run_hook_inject() -> String {
         Ok(k) if !k.is_empty() => k,
         _ => return empty,
     };
-    let api_url = std::env::var("EREBYX_API_URL")
-        .unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+    let api_url =
+        std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
     // Build a quick HTTP client with 500ms hard timeout.
     let http = match reqwest::Client::builder()

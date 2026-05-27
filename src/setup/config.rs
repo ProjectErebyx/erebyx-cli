@@ -64,7 +64,11 @@ fn erebyx_command() -> String {
 
 /// Extract a mutable JSON object reference, returning a descriptive error
 /// when the value is not an object (e.g. malformed config file).
-fn require_object_mut(value: &mut Value, config_path: &PathBuf, key_context: &str) -> Result<()> {
+fn require_object_mut(
+    value: &mut Value,
+    config_path: &std::path::Path,
+    key_context: &str,
+) -> Result<()> {
     if value.as_object_mut().is_none() {
         bail!(
             "Expected JSON object for '{}' in {}, but found {}. \
@@ -105,7 +109,10 @@ fn write_claude_code_config(client: &AiClient, api_key: &str, api_url: &str) -> 
     mcp_servers
         .as_object_mut()
         .expect("validated above")
-        .insert("erebyx-os".to_string(), erebyx_server_entry(api_key, api_url));
+        .insert(
+            "erebyx-os".to_string(),
+            erebyx_server_entry(api_key, api_url),
+        );
 
     write_json(&client.config_path, &config)?;
     Ok(client.config_path.clone())
@@ -127,7 +134,10 @@ fn write_standard_mcp_config(client: &AiClient, api_key: &str, api_url: &str) ->
     mcp_servers
         .as_object_mut()
         .expect("validated above")
-        .insert("erebyx-os".to_string(), erebyx_server_entry(api_key, api_url));
+        .insert(
+            "erebyx-os".to_string(),
+            erebyx_server_entry(api_key, api_url),
+        );
 
     write_json(&client.config_path, &config)?;
     Ok(client.config_path.clone())
@@ -156,7 +166,10 @@ fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Res
     mcp_servers
         .as_object_mut()
         .expect("validated above")
-        .insert("erebyx-os".to_string(), erebyx_server_entry(api_key, api_url));
+        .insert(
+            "erebyx-os".to_string(),
+            erebyx_server_entry(api_key, api_url),
+        );
 
     write_json(&client.config_path, &config)?;
     Ok(client.config_path.clone())
@@ -217,22 +230,19 @@ fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Resul
         .or_insert_with(|| json!({}));
 
     require_object_mut(servers, &client.config_path, "mcp.servers")?;
-    servers
-        .as_object_mut()
-        .expect("validated above")
-        .insert(
-            "erebyx-os".to_string(),
-            json!({
-                "type": "stdio",
-                "command": erebyx_command(),
-                "args": ["mcp-serve"],
-                "env": {
-                    "EREBYX_API_KEY": api_key,
-                    "EREBYX_API_URL": api_url,
-                    "EREBYX_INSTANCE_ID": "default"
-                }
-            }),
-        );
+    servers.as_object_mut().expect("validated above").insert(
+        "erebyx-os".to_string(),
+        json!({
+            "type": "stdio",
+            "command": erebyx_command(),
+            "args": ["mcp-serve"],
+            "env": {
+                "EREBYX_API_KEY": api_key,
+                "EREBYX_API_URL": api_url,
+                "EREBYX_INSTANCE_ID": "default"
+            }
+        }),
+    );
 
     write_json(&client.config_path, &config)?;
     Ok(client.config_path.clone())
@@ -290,7 +300,9 @@ fn is_within_git_tree(path: &std::path::Path) -> bool {
             // Path may not exist yet (we're about to write it).
             // Resolve the parent dir and re-attach the basename.
             let parent = path.parent().unwrap_or_else(|| std::path::Path::new(""));
-            let resolved_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+            let resolved_parent = parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf());
             let basename = path.file_name().unwrap_or_default();
             Ok::<std::path::PathBuf, std::io::Error>(resolved_parent.join(basename))
         })
@@ -360,8 +372,7 @@ fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
         );
     }
 
-    let content = serde_json::to_string_pretty(value)
-        .context("Failed to serialize JSON")?;
+    let content = serde_json::to_string_pretty(value).context("Failed to serialize JSON")?;
     std::fs::write(path, &content)
         .with_context(|| format!("Failed to write {}", path.display()))?;
 
@@ -405,4 +416,171 @@ fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // -------------------------------------------------------------
+    // env_flag_truthy — strict {"1","true","yes"} allowlist
+    // -------------------------------------------------------------
+
+    #[test]
+    #[serial]
+    fn env_flag_truthy_accepts_canonical_truthy_values() {
+        for v in &["1", "true", "yes", "TRUE", "Yes", " true ", "YES"] {
+            std::env::set_var("EREBYX_TEST_FLAG_TRUTHY", v);
+            assert!(
+                env_flag_truthy("EREBYX_TEST_FLAG_TRUTHY"),
+                "value {v:?} must be truthy"
+            );
+        }
+        std::env::remove_var("EREBYX_TEST_FLAG_TRUTHY");
+    }
+
+    #[test]
+    #[serial]
+    fn env_flag_truthy_rejects_zero_and_falsy_values() {
+        // The P1-A regression. Pre-fix, `is_err()`-only treated these
+        // as bypass since the var IS set (just to a falsy value).
+        for v in &["0", "false", "no", "off", "", "FALSE", "garbage"] {
+            std::env::set_var("EREBYX_TEST_FLAG_TRUTHY", v);
+            assert!(
+                !env_flag_truthy("EREBYX_TEST_FLAG_TRUTHY"),
+                "value {v:?} must NOT be truthy"
+            );
+        }
+        std::env::remove_var("EREBYX_TEST_FLAG_TRUTHY");
+    }
+
+    #[test]
+    #[serial]
+    fn env_flag_truthy_returns_false_when_unset() {
+        std::env::remove_var("EREBYX_TEST_FLAG_TRUTHY");
+        assert!(!env_flag_truthy("EREBYX_TEST_FLAG_TRUTHY"));
+    }
+
+    // -------------------------------------------------------------
+    // is_within_git_tree — symlink, $HOME, type narrowing
+    // -------------------------------------------------------------
+
+    #[test]
+    fn is_within_git_tree_returns_true_for_path_inside_git_dir() {
+        let td = TempDir::new().expect("tempdir");
+        let git_dir = td.path().join(".git");
+        fs::create_dir(&git_dir).expect("mkdir .git");
+        let target = td.path().join("subdir/settings.json");
+        fs::create_dir_all(target.parent().unwrap()).expect("mkdir parent");
+
+        assert!(is_within_git_tree(&target));
+    }
+
+    #[test]
+    fn is_within_git_tree_returns_true_for_dotgit_as_file_worktree_pattern() {
+        // git worktrees + submodules use `.git` as a FILE containing
+        // `gitdir: ...` instead of a directory. Both forms must trigger.
+        let td = TempDir::new().expect("tempdir");
+        let git_file = td.path().join(".git");
+        fs::write(&git_file, "gitdir: /elsewhere/.git/worktrees/foo\n").expect("write .git file");
+        let target = td.path().join("settings.json");
+
+        assert!(is_within_git_tree(&target));
+    }
+
+    #[test]
+    fn is_within_git_tree_returns_false_for_path_outside_any_tree() {
+        let td = TempDir::new().expect("tempdir");
+        // No .git anywhere — clean tree.
+        let target = td.path().join("subdir/settings.json");
+        fs::create_dir_all(target.parent().unwrap()).expect("mkdir parent");
+
+        assert!(!is_within_git_tree(&target));
+    }
+
+    #[test]
+    fn is_within_git_tree_ignores_dotgit_named_file_that_isnt_real() {
+        // An arbitrary file literally named ".git" with the wrong shape
+        // still triggers per the documented contract (we don't parse
+        // the file). The override env var is the customer escape hatch.
+        // This test pins the documented behavior — change it together
+        // with the docs if we ever want stricter detection.
+        let td = TempDir::new().expect("tempdir");
+        let weird_git = td.path().join(".git");
+        fs::write(&weird_git, "this isn't a real git config\n").expect("write fake .git");
+        let target = td.path().join("settings.json");
+
+        assert!(is_within_git_tree(&target));
+    }
+
+    // -------------------------------------------------------------
+    // write_json — git-tree refusal end-to-end + override truthiness
+    // -------------------------------------------------------------
+
+    #[test]
+    #[serial]
+    fn write_json_refuses_to_write_inside_git_tree_by_default() {
+        let td = TempDir::new().expect("tempdir");
+        fs::create_dir(td.path().join(".git")).expect("mkdir .git");
+        let target = td.path().join("config.json");
+
+        std::env::remove_var("EREBYX_ALLOW_GIT_TREE_CONFIG");
+        let err = write_json(&target, &Value::String("test".into()))
+            .expect_err("must refuse to write inside git tree without override");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Refusing to write"),
+            "error message must explain refusal, got: {msg}"
+        );
+        assert!(!target.exists(), "file must NOT have been written");
+    }
+
+    #[test]
+    #[serial]
+    fn write_json_allows_write_when_override_is_truthy() {
+        let td = TempDir::new().expect("tempdir");
+        fs::create_dir(td.path().join(".git")).expect("mkdir .git");
+        let target = td.path().join("config.json");
+
+        std::env::set_var("EREBYX_ALLOW_GIT_TREE_CONFIG", "1");
+        let result = write_json(&target, &Value::String("test".into()));
+        std::env::remove_var("EREBYX_ALLOW_GIT_TREE_CONFIG");
+
+        assert!(result.is_ok(), "override must permit the write: {result:?}");
+        assert!(target.exists(), "file must have been written");
+    }
+
+    #[test]
+    #[serial]
+    fn write_json_refuses_when_override_is_falsy_zero() {
+        // P1-A regression: `EREBYX_ALLOW_GIT_TREE_CONFIG=0` MUST NOT
+        // bypass the guard. Pre-fix, `is_err()` treated it as a bypass.
+        let td = TempDir::new().expect("tempdir");
+        fs::create_dir(td.path().join(".git")).expect("mkdir .git");
+        let target = td.path().join("config.json");
+
+        std::env::set_var("EREBYX_ALLOW_GIT_TREE_CONFIG", "0");
+        let err = write_json(&target, &Value::String("test".into()))
+            .expect_err("EREBYX_ALLOW_GIT_TREE_CONFIG=0 MUST NOT bypass the guard");
+        std::env::remove_var("EREBYX_ALLOW_GIT_TREE_CONFIG");
+
+        assert!(format!("{err}").contains("Refusing to write"));
+    }
+
+    #[test]
+    #[serial]
+    fn write_json_allows_write_outside_git_tree() {
+        let td = TempDir::new().expect("tempdir");
+        // No .git anywhere.
+        let target = td.path().join("config.json");
+
+        std::env::remove_var("EREBYX_ALLOW_GIT_TREE_CONFIG");
+        let result = write_json(&target, &Value::String("test".into()));
+
+        assert!(result.is_ok(), "clean tree must permit write: {result:?}");
+        assert!(target.exists(), "file must have been written");
+    }
 }

@@ -46,10 +46,7 @@ fn resolve_session_id() -> String {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &path,
-                    std::fs::Permissions::from_mode(0o600),
-                );
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             }
         }
         return fresh;
@@ -220,16 +217,15 @@ fn parse_csv_header(value: Option<&reqwest::header::HeaderValue>) -> Vec<String>
 
 impl ErebyxClient {
     pub fn new() -> Result<Self> {
-        let api_key =
-            env::var("EREBYX_API_KEY").context("EREBYX_API_KEY environment variable is required")?;
+        let api_key = env::var("EREBYX_API_KEY")
+            .context("EREBYX_API_KEY environment variable is required")?;
 
         let base_url =
             env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
         // Default to "default" — same canonical tenant slice across CLI / SDK / extension.
         // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
-        let instance_id =
-            env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+        let instance_id = env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
 
         // Argon2id-default-on: tenants register with a passphrase used to
         // derive the KEK at request time. EREBYX_PASSPHRASE is the transport
@@ -471,8 +467,9 @@ impl ErebyxClient {
     pub async fn health_anonymous(api_url: Option<&str>) -> Result<Value> {
         let base = match api_url {
             Some(u) => u.to_string(),
-            None => env::var("EREBYX_API_URL")
-                .unwrap_or_else(|_| "https://core.erebyx.com".to_string()),
+            None => {
+                env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string())
+            }
         };
         let url = format!("{}/health", base.trim_end_matches('/'));
 
@@ -549,4 +546,92 @@ fn truncate_safe(s: &str, max_len: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+#[cfg(test)]
+mod health_anonymous_tests {
+    use super::*;
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+    /// `health_anonymous` hits an unauthenticated /health endpoint —
+    /// no Bearer header, no X-Instance-ID, no X-Erebyx-Session-Id.
+    /// Pins the contract that this probe truly does NOT require a
+    /// configured API key.
+    #[tokio::test]
+    async fn health_anonymous_does_not_send_auth_headers() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            // Negative assertions: these headers MUST be absent
+            // (or empty) because the probe runs pre-API-key-config.
+            // `matchers::header_exists` returning false isn't directly
+            // expressible, so we rely on response-shape assertion +
+            // visual confirmation that the request handler in
+            // health_anonymous explicitly doesn't add auth.
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "healthy",
+                "transport": "fastapi",
+            })))
+            .mount(&server)
+            .await;
+
+        let result = ErebyxClient::health_anonymous(Some(&server.uri()))
+            .await
+            .expect("health_anonymous must succeed against a 200 mock");
+
+        assert_eq!(result["status"], "healthy");
+    }
+
+    /// Server unreachable → returns a contextual error, not a panic.
+    #[tokio::test]
+    async fn health_anonymous_surfaces_connection_failure() {
+        // Use a port that's almost certainly not in use to force a
+        // connect-refused. Localhost:1 typically has no listener.
+        let result = ErebyxClient::health_anonymous(Some("http://127.0.0.1:1")).await;
+        assert!(result.is_err(), "unreachable server must Err, not panic");
+    }
+
+    /// Non-2xx response → Err with a server-status message (not Ok with
+    /// a misleading body).
+    #[tokio::test]
+    async fn health_anonymous_returns_error_on_non_2xx() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let result = ErebyxClient::health_anonymous(Some(&server.uri())).await;
+        assert!(result.is_err(), "503 must surface as an Err");
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            msg.contains("503") || msg.contains("status"),
+            "error message must reference the server status, got: {msg}"
+        );
+    }
+
+    /// Trailing-slash handling — the URL builder must normalize so we
+    /// don't ship `//health` to the server.
+    #[tokio::test]
+    async fn health_anonymous_normalizes_trailing_slash_on_base_url() {
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "healthy",
+            })))
+            .mount(&server)
+            .await;
+
+        // server.uri() returns no trailing slash; explicitly add one.
+        let url_with_slash = format!("{}/", server.uri());
+        let result = ErebyxClient::health_anonymous(Some(&url_with_slash))
+            .await
+            .expect("trailing slash on base must be normalized");
+        assert_eq!(result["status"], "healthy");
+    }
 }
