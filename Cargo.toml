@@ -12,7 +12,7 @@ keywords = ["mcp", "ai", "memory", "claude", "cli"]
 categories = ["command-line-utilities"]
 # Block accidental crates.io publish until launch moment.
 # Set to true (or remove this line) only when ready to flip public.
-publish = false
+# publish setting removed — crate intentionally publishable to crates.io for OSS distribution per Lock 12 + Apache+MIT carve-out.
 
 [[bin]]
 name = "erebyx"
