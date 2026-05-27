@@ -155,6 +155,22 @@ pub enum Commands {
     /// Not intended for direct user invocation. Wired automatically by `erebyx setup`.
     #[command(hide = true)]
     HookInject,
+
+    /// Internal: SessionStart pre-injection hook handler.
+    ///
+    /// Reads a SessionStart hook payload from stdin, fetches stored identity +
+    /// most recent handoff from the substrate, and emits the resulting context
+    /// as additionalContext JSON to stdout. This is the claude-mem-equivalent
+    /// pre-injection mechanic — the AI sees stored identity + last session's
+    /// handoff BEFORE the first user prompt, eliminating the
+    /// "AI never calls restore_identity if user doesn't mention memory" gap.
+    ///
+    /// Fail-open on any error path (emits `{}`). 800ms hard timeout — never
+    /// blocks session boot.
+    ///
+    /// Not intended for direct user invocation. Wired automatically by `erebyx setup`.
+    #[command(hide = true)]
+    HookSessionStart,
 }
 
 #[derive(Clone, ValueEnum)]

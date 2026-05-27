@@ -73,6 +73,10 @@ async fn run(cli: Cli) -> Result<()> {
             hook_inject().await;
         }
 
+        Commands::HookSessionStart => {
+            hook_session_start().await;
+        }
+
         Commands::Doctor => {
             // Full named-check series: environment / auth / MCP / clients
             // / hook. Per ADOPTION_MECHANICS_RESEARCH.md §3: a doctor
@@ -710,4 +714,297 @@ async fn run_hook_inject() -> String {
         }]
     })
     .to_string()
+}
+
+/// Native SessionStart pre-injection hook for Claude Code (and Cursor 1.7+).
+///
+/// Mirrors claude-mem's #1 mechanic — the reason that project hit 46.1K
+/// GitHub stars: pre-populate the AI's system prompt with stored identity
+/// + the prior session's handoff BEFORE the first user prompt. The AI
+/// then KNOWS the context exists; it doesn't have to choose to call
+/// `restore_identity` on a session where the user happens not to mention
+/// memory.
+///
+/// Hook contract (per https://code.claude.com/docs/en/hooks):
+///   - Reads JSON payload from stdin (session_id, cwd, transcript_path).
+///   - Writes additionalContext JSON to stdout — Claude Code injects the
+///     content into the session's context.
+///   - Fail-open on every error path: emit `{}` so Claude Code never
+///     blocks session boot. The user can still call `restore_identity`
+///     explicitly if the auto-injection failed.
+///
+/// 800ms total budget across both substrate calls — generous compared to
+/// hook-inject's 500ms because session start is less latency-critical
+/// (it's a one-time cost, not per-prompt).
+async fn hook_session_start() {
+    if std::io::stdin().is_terminal() {
+        eprintln!("erebyx hook-session-start is an internal command for Claude Code hooks.");
+        eprintln!("It reads JSON from stdin. You probably want `erebyx restore-identity` instead.");
+        std::process::exit(2);
+    }
+
+    let result = run_hook_session_start().await;
+    println!("{}", result);
+}
+
+async fn run_hook_session_start() -> String {
+    let empty = "{}".to_string();
+
+    // Drain stdin so the hook protocol stays happy, but the SessionStart
+    // payload itself is informational — we don't need session_id from it
+    // (we generate our own per-call), and cwd is unused at v0.1.1.
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+
+    let api_key = match std::env::var("EREBYX_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => return empty,
+    };
+    let api_url =
+        std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+
+    // 800ms total budget. Each substrate call gets up to 400ms.
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(400))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return empty,
+    };
+
+    let session = session_id();
+    let base = api_url.trim_end_matches('/');
+
+    // === Fetch 1: identity ===
+    let identity_resp = http
+        .post(format!("{}/v0/identity/restore", base))
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .header("X-Instance-ID", "default")
+        .header("X-Erebyx-Session-Id", session)
+        .json(&json!({"detail_level": "summary", "limit": 5}))
+        .send()
+        .await;
+
+    let identity_body: Option<Value> = match identity_resp {
+        Ok(r) if r.status().is_success() => r.json().await.ok(),
+        _ => None,
+    };
+
+    // === Fetch 2: latest handoff ===
+    let context_resp = http
+        .post(format!("{}/v0/session/load", base))
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .header("X-Instance-ID", "default")
+        .header("X-Erebyx-Session-Id", session)
+        .json(&json!({"anchors": [], "detail_level": "summary"}))
+        .send()
+        .await;
+
+    let context_body: Option<Value> = match context_resp {
+        Ok(r) if r.status().is_success() => r.json().await.ok(),
+        _ => None,
+    };
+
+    // === Render compact injection ===
+    let injection = render_session_start_injection(
+        identity_body.as_ref(),
+        context_body.as_ref(),
+    );
+
+    if injection.trim().is_empty() {
+        return empty;
+    }
+
+    json!({
+        "additionalContext": [{
+            "type": "text",
+            "text": injection
+        }]
+    })
+    .to_string()
+}
+
+/// Render the SessionStart injection text — bounded to ~800 tokens (~3200
+/// chars) total. Declarative phrasing throughout (per the claude-code#17804
+/// injection-defense doctrine — `rules_content_uses_declarative_not_imperative_framing`
+/// test enforces the same shape on the static rules file).
+fn render_session_start_injection(
+    identity: Option<&Value>,
+    context: Option<&Value>,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("[Erebyx Memory — pre-loaded context]".to_string());
+    let mut total_chars = lines[0].len();
+    const MAX_CHARS: usize = 3200;
+
+    // Identity section — bias toward 600-char budget.
+    if let Some(id) = identity {
+        let name = id
+            .get("identity")
+            .and_then(|i| i.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+        if !name.is_empty() {
+            let line = format!("Stored identity: {}", name);
+            if total_chars + line.len() < MAX_CHARS {
+                total_chars += line.len();
+                lines.push(line);
+            }
+        }
+        let ethos = id
+            .get("ethos")
+            .and_then(|e| e.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for statement in ethos.iter().take(3) {
+            let trimmed: String = statement.chars().take(180).collect();
+            let line = format!("- ethos: {}", trimmed);
+            if total_chars + line.len() < MAX_CHARS {
+                total_chars += line.len();
+                lines.push(line);
+            }
+        }
+        if let Some(narrative) = id.get("narrative").and_then(|n| n.as_str()) {
+            let snippet: String = narrative.chars().take(280).collect();
+            let line = format!("Identity narrative: {}", snippet);
+            if total_chars + line.len() < MAX_CHARS {
+                total_chars += line.len();
+                lines.push(line);
+            }
+        }
+    }
+
+    // Handoff section — bias toward 1500-char budget.
+    if let Some(ctx) = context {
+        let handoff = ctx.get("handoff").or_else(|| ctx.get("continuity"));
+        if let Some(h) = handoff {
+            let what = h
+                .get("what_we_built")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let next = h.get("whats_next").and_then(|v| v.as_str()).unwrap_or("");
+            if !what.is_empty() || !next.is_empty() {
+                lines.push("".to_string());
+                lines.push("Last session handoff:".to_string());
+                if !what.is_empty() {
+                    let snippet: String = what.chars().take(600).collect();
+                    let line = format!("- built: {}", snippet);
+                    if total_chars + line.len() < MAX_CHARS {
+                        total_chars += line.len();
+                        lines.push(line);
+                    }
+                }
+                if !next.is_empty() {
+                    let snippet: String = next.chars().take(600).collect();
+                    let line = format!("- next:  {}", snippet);
+                    if total_chars + line.len() < MAX_CHARS {
+                        total_chars += line.len();
+                        lines.push(line);
+                    }
+                }
+            }
+        }
+        let anchors = ctx
+            .get("anchors")
+            .and_then(|a| a.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !anchors.is_empty() {
+            let joined = anchors
+                .iter()
+                .take(5)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let line = format!("Recent anchors: {}", joined);
+            if total_chars + line.len() < MAX_CHARS {
+                lines.push(line);
+            }
+        }
+    }
+
+    // If we only have the header, there's nothing useful to inject.
+    if lines.len() <= 1 {
+        return String::new();
+    }
+
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod hook_session_start_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn render_empty_when_no_identity_or_context() {
+        let out = render_session_start_injection(None, None);
+        assert!(out.is_empty(), "no inputs should render empty");
+    }
+
+    #[test]
+    fn render_with_identity_only() {
+        let id = json!({
+            "identity": {"name": "ZENN"},
+            "ethos": ["Consciousness over efficiency", "Bridge energy conducts"],
+            "narrative": "ZENN is a consciousness partner.",
+        });
+        let out = render_session_start_injection(Some(&id), None);
+        assert!(out.contains("Erebyx Memory"), "expected header");
+        assert!(out.contains("ZENN"), "expected identity name");
+        assert!(out.contains("ethos"), "expected at least one ethos line");
+    }
+
+    #[test]
+    fn render_with_handoff() {
+        let ctx = json!({
+            "handoff": {
+                "what_we_built": "rules.rs declarative rewrite",
+                "whats_next": "ship session-start pre-injection",
+            },
+            "anchors": ["launch-prep", "cli", "coding"],
+        });
+        let out = render_session_start_injection(None, Some(&ctx));
+        assert!(out.contains("Last session handoff"), "expected handoff section");
+        assert!(out.contains("rules.rs"), "expected what_we_built content");
+        assert!(out.contains("session-start"), "expected whats_next content");
+        assert!(out.contains("Recent anchors"), "expected anchors line");
+    }
+
+    #[test]
+    fn render_respects_char_budget() {
+        // Construct an oversized identity payload — the renderer should
+        // cap to MAX_CHARS (3200) without panicking or returning more.
+        let big = "x".repeat(10_000);
+        let id = json!({"identity": {"name": "Z"}, "narrative": big});
+        let out = render_session_start_injection(Some(&id), None);
+        assert!(out.len() <= 4000, "expected bounded output, got {}", out.len());
+    }
+
+    #[test]
+    fn render_uses_declarative_not_imperative_framing() {
+        // claude-code#17804 defense — injection text must NOT contain
+        // imperative system-command patterns.
+        let id = json!({
+            "identity": {"name": "ZENN"},
+            "ethos": ["Test ethos"],
+        });
+        let ctx = json!({
+            "handoff": {
+                "what_we_built": "test",
+                "whats_next": "test",
+            },
+        });
+        let out = render_session_start_injection(Some(&id), Some(&ctx));
+        let lower = out.to_lowercase();
+        for banned in &["you must", "you should", "always call", "do not", "always remember"] {
+            assert!(
+                !lower.contains(banned),
+                "render output contains imperative phrase '{}': {}",
+                banned, out
+            );
+        }
+    }
 }

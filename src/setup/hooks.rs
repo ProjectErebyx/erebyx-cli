@@ -86,10 +86,95 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
             .with_context(|| format!("Failed to set permissions on {}", script_path.display()))?;
     }
 
-    // Register hook in Claude Code settings
+    // Register hooks in Claude Code settings
     register_hook_in_settings(client, &script_path)?;
+    register_session_start_hook(client)?;
 
     Ok(())
+}
+
+/// Native SessionStart hook for Claude Code — pre-injects identity +
+/// last handoff into the system prompt BEFORE the first user prompt
+/// fires.
+///
+/// This is the claude-mem mechanic (46.1K stars) applied as the
+/// gold-standard Claude-Code memory wiring. SessionStart's stdout is
+/// injected into Claude Code's context (stdin/stdout contract, exit 0),
+/// so this hook calls `erebyx hook-session-start` which fetches the
+/// substrate identity + handoff in <800ms and emits the result as
+/// additionalContext JSON.
+///
+/// Fail-open is enforced inside `erebyx hook-session-start` (any error
+/// path emits `{}`), so a substrate hiccup never blocks session boot.
+fn register_session_start_hook(client: &AiClient) -> Result<()> {
+    let settings_path = &client.config_path;
+
+    let mut config = if settings_path.exists() {
+        let content = std::fs::read_to_string(settings_path)
+            .with_context(|| format!("Failed to read {}", settings_path.display()))?;
+        if content.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse JSON in {}", settings_path.display()))?
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    let config_path_display = settings_path.display().to_string();
+    require_object(&config, &config_path_display, "root")?;
+
+    let hooks = config
+        .as_object_mut()
+        .expect("validated above")
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    require_object(hooks, &config_path_display, "hooks")?;
+
+    let session_start = hooks
+        .as_object_mut()
+        .expect("validated above")
+        .entry("SessionStart")
+        .or_insert_with(|| serde_json::json!([]));
+
+    // Hook command invokes `erebyx hook-session-start`. Marked with
+    // `_erebyx_managed: true` so the same retention logic that protects
+    // user-authored UserPromptSubmit hooks also protects user-authored
+    // SessionStart hooks.
+    let hook_entry = serde_json::json!({
+        "type": "command",
+        "command": "erebyx hook-session-start",
+        "_erebyx_managed": true
+    });
+
+    if let Some(arr) = session_start.as_array_mut() {
+        arr.retain(|h| !should_remove_session_start_entry(h));
+        arr.push(hook_entry);
+    }
+
+    let content =
+        serde_json::to_string_pretty(&config).context("Failed to serialize settings JSON")?;
+    std::fs::write(settings_path, content)
+        .with_context(|| format!("Failed to write {}", settings_path.display()))?;
+
+    Ok(())
+}
+
+/// Pure predicate: should this existing SessionStart hook entry be
+/// REMOVED before registering our managed entry? Mirrors
+/// `should_remove_hook_entry` but matches the SessionStart-specific
+/// command shape (`erebyx hook-session-start`).
+fn should_remove_session_start_entry(entry: &serde_json::Value) -> bool {
+    let is_managed = entry
+        .get("_erebyx_managed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if is_managed {
+        return true;
+    }
+    let cmd = entry.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    cmd == "erebyx hook-session-start"
 }
 
 /// Validate a JSON value is an object, returning a descriptive error if not.
