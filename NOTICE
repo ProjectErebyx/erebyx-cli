@@ -19,3 +19,13 @@ This crate is dual-licensed under MIT OR Apache-2.0 at your option.
 - LICENSE-MIT: MIT License (no patent grant)
 - LICENSE-APACHE-2.0: Apache License 2.0 (with §3 patent grant)
 The original NOTICE attribution above applies when used under Apache-2.0.
+
+---
+THIRD-PARTY LICENSES:
+This binary statically links the following dependencies under their
+respective licenses. Source code for each is available at the linked
+upstream repositories.
+
+- colored (MPL-2.0) — https://github.com/colored-rs/colored
+  Source-availability obligation: the MPL-2.0 attaches to the colored
+  crate itself if modified. The colored crate is used unmodified.
