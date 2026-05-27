@@ -11,7 +11,7 @@ use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
 use client::{session_id, ErebyxClient};
-use output::{print_error, print_response};
+use output::{print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
 async fn main() {
@@ -91,7 +91,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("restore_identity", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -109,7 +109,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("load_context", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -143,7 +143,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("save", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -181,7 +181,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("remember", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
             if resp.is_error {
                 std::process::exit(1);
             }
@@ -215,7 +215,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let resp = client.call_tool("wrap_up", args).await?;
-            print_response(&resp.content, resp.is_error, json_mode);
+            print_response_with_hints(&resp.content, resp.is_error, json_mode, &resp.hints, &resp.auto_fired);
             if resp.is_error {
                 std::process::exit(1);
             }

@@ -1,12 +1,44 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 use colored::Colorize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Print the response from an MCP tool call.
 /// In JSON mode, prints raw JSON. Otherwise, prints colored terminal output.
 pub fn print_response(content: &Value, is_error: bool, json_mode: bool) {
+    print_response_with_hints(content, is_error, json_mode, &[], &[]);
+}
+
+/// Print response with lifecycle hints surfaced.
+///
+/// JSON mode: hints + auto_fired are merged into the top-level JSON
+/// object as ``hints`` and ``auto_fired`` arrays (alongside the tool's
+/// own content), so ``jq '.hints'`` / ``jq '.auto_fired'`` work as the
+/// public docs promise. If ``content`` is not a JSON object, the JSON
+/// output wraps it under ``content``.
+///
+/// Terminal mode: hints render as a dim note after the response if
+/// any are present. Auto-fired tools are surfaced only when present.
+pub fn print_response_with_hints(
+    content: &Value,
+    is_error: bool,
+    json_mode: bool,
+    hints: &[String],
+    auto_fired: &[String],
+) {
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(content).unwrap_or_default());
+        let mut envelope = match content {
+            Value::Object(_) => content.clone(),
+            other => json!({ "content": other }),
+        };
+        if let Value::Object(ref mut map) = envelope {
+            if !hints.is_empty() {
+                map.insert("hints".into(), json!(hints));
+            }
+            if !auto_fired.is_empty() {
+                map.insert("auto_fired".into(), json!(auto_fired));
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&envelope).unwrap_or_default());
         return;
     }
 
@@ -16,6 +48,13 @@ pub fn print_response(content: &Value, is_error: bool, json_mode: bool) {
     }
 
     print_value(content, 0);
+
+    if !hints.is_empty() {
+        eprintln!("{} {}", "hint:".dimmed(), hints.join(", ").dimmed());
+    }
+    if !auto_fired.is_empty() {
+        eprintln!("{} {}", "auto-fired:".dimmed(), auto_fired.join(", ").dimmed());
+    }
 }
 
 /// Print an error response with red formatting

@@ -42,7 +42,7 @@ First public release. The CLI surfaces the EREBYX v0.1.1 cognitive verbs as nati
 
 - `EREBYX_API_KEY` (required)
 - `EREBYX_API_URL` (default: `https://core.erebyx.com`)
-- `EREBYX_INSTANCE_ID` (default: `cli`)
+- `EREBYX_INSTANCE_ID` (default: `default` — same canonical tenant slice across CLI / SDK / extension; override for per-surface attribution)
 - `EREBYX_HINTS_DISABLED=1` — opt out of `X-Erebyx-Hint` parsing
 - `EREBYX_DISABLE_AUTO_FIRE=1` — opt out of substrate-side cold-fire (rare; usually you want it)
 

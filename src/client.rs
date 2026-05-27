@@ -126,6 +126,35 @@ pub struct ErebyxClient {
 pub struct McpResponse {
     pub content: Value,
     pub is_error: bool,
+    /// Lifecycle hints from the substrate (parsed from the
+    /// ``X-Erebyx-Hint`` response header). Empty when the substrate
+    /// emits no hints OR the env override ``EREBYX_HINTS_DISABLED=1``
+    /// is set. Known values: ``wrap_up_recommended``,
+    /// ``restore_identity_recommended``, ``load_context_recommended``,
+    /// ``compact_imminent``.
+    pub hints: Vec<String>,
+    /// Tools the substrate auto-fired during this request (parsed from
+    /// the ``X-Erebyx-Auto-Fired`` response header). Typically
+    /// ``["restore_identity", "load_context"]`` on the first call
+    /// against a fresh ``(instance_id, session_id)`` tuple, empty
+    /// thereafter.
+    pub auto_fired: Vec<String>,
+}
+
+/// Parse a comma-separated header value into a deduped, trimmed,
+/// lowercase-comparable list. Used for ``X-Erebyx-Hint`` and
+/// ``X-Erebyx-Auto-Fired`` capture. Empty header → empty Vec.
+fn parse_csv_header(value: Option<&reqwest::header::HeaderValue>) -> Vec<String> {
+    value
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl ErebyxClient {
@@ -219,6 +248,22 @@ impl ErebyxClient {
                 );
             }
         }
+        // Capture lifecycle headers BEFORE .text() consumes the response.
+        // Honors EREBYX_HINTS_DISABLED env var as a per-call opt-out so
+        // the brutal-review-flagged "documented but unimplemented"
+        // protocol becomes "documented and honored at the CLI surface."
+        let hints_disabled = std::env::var("EREBYX_HINTS_DISABLED")
+            .ok()
+            .filter(|v| !v.is_empty() && v != "0")
+            .is_some();
+        let (hints, auto_fired) = if hints_disabled {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                parse_csv_header(response.headers().get("X-Erebyx-Hint")),
+                parse_csv_header(response.headers().get("X-Erebyx-Auto-Fired")),
+            )
+        };
         let response_text = response
             .text()
             .await
@@ -244,6 +289,8 @@ impl ErebyxClient {
             return Ok(McpResponse {
                 content: json!({ "error": message }),
                 is_error: true,
+                hints,
+                auto_fired,
             });
         }
 
@@ -283,7 +330,12 @@ impl ErebyxClient {
             result
         };
 
-        Ok(McpResponse { content, is_error })
+        Ok(McpResponse {
+            content,
+            is_error,
+            hints,
+            auto_fired,
+        })
     }
 
     /// Forward a raw JSON-RPC request body to the substrate `/mcp/` endpoint

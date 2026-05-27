@@ -121,7 +121,7 @@ export EREBYX_API_KEY="<YOUR_API_KEY>"
 
 # Optional (defaults shown)
 export EREBYX_API_URL="https://core.erebyx.com"
-export EREBYX_INSTANCE_ID="cli"
+export EREBYX_INSTANCE_ID="default"
 ```
 
 Get your API key at [app.erebyx.com/keys](https://app.erebyx.com/keys).
