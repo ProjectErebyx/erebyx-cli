@@ -5,7 +5,24 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "erebyx",
     version,
-    about = "Connect any MCP-capable AI to your Erebyx memory substrate. Native CLI binary; setup wires `erebyx mcp-serve` into each detected client."
+    about = "Persistent AI memory across every AI you use.",
+    long_about = "Erebyx — persistent AI memory across every AI you use.
+
+Connects any MCP-capable AI client (Claude Code, Cursor, Windsurf, Continue,
+Zed, VS Code / Copilot, ChatGPT Custom GPTs, Hermes, raw HTTP harnesses) to
+your Erebyx memory substrate. The 5 cognitive verbs (restore_identity,
+load_context, save, remember, wrap_up) are the canonical surface.
+
+Quickstart:
+  export EREBYX_API_KEY=<your key>      # get one at app.erebyx.com/keys
+  erebyx setup                          # auto-detect + write configs
+  erebyx doctor                         # verify the wiring
+
+Docs:    https://github.com/ProjectErebyx/erebyx-cookbook
+Issues:  https://github.com/ProjectErebyx/EREBYX-CLI/issues",
+    after_help = "Run `erebyx <COMMAND> --help` for command-specific options.
+
+Most users only need:  erebyx setup  +  erebyx doctor."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -138,6 +155,13 @@ pub enum Commands {
         /// API URL override (default: https://core.erebyx.com)
         #[arg(long)]
         api_url: Option<String>,
+
+        /// Preview without writing — show every file setup would touch
+        /// and every config merge it would perform, then exit. Nothing
+        /// on disk is modified. Useful for auditing what setup will do
+        /// before running it for real.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Check Erebyx server health and client configurations
