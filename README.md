@@ -57,7 +57,7 @@ erebyx setup
 # Restart Claude Code
 ```
 
-See [examples/hooks/claude-code/](https://erebyx.com/docs/integrations/claude-code)
+See [cookbook/claude-code](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/claude-code/README.md)
 
 </td>
 <td>
@@ -70,7 +70,7 @@ erebyx setup
 # Restart Cursor
 ```
 
-See [examples/hooks/cursor/](https://erebyx.com/docs/integrations/cursor)
+See [cookbook/cursor](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/cursor/README.md)
 
 </td>
 <td>
@@ -81,7 +81,7 @@ erebyx setup
 # Walks API key + config
 ```
 
-Or call the HTTP API directly: see [examples/hooks/raw-http/](https://erebyx.com/docs/integrations/raw-http)
+Or call the HTTP API directly: see [cookbook/raw-http](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/raw-http/README.md)
 
 </td>
 </tr>
