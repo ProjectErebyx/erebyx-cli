@@ -59,7 +59,7 @@ None. First public release.
 
 ### Deferred to v0.2
 
-- `evolve` — memory reconsolidation (substrate-internal in v0.1.1; CLI verb in v0.2)
+- `evolve` — update a memory with new context (substrate-internal in v0.1.1; CLI verb in v0.2)
 - `learn` — explicit relationship formation
 - `import` — bulk import from ChatGPT / Claude / Markdown exports
 - `pin` / `release` — explicit memory tier control
