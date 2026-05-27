@@ -53,15 +53,23 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
     // error signal. v0.1.2 will ship the PowerShell variant; v0.1.1 punts
     // cleanly with a clear message so the customer knows what landed and
     // what didn't.
+    // Brutal-review wave-2 (2026-05-27 CLI lane): SessionStart hook is
+    // pure settings.json JSON mutation — it works fine on Windows. Only
+    // the UserPromptSubmit bash script (`.sh`) is Unix-only. Splitting
+    // the two registrations so SessionStart pre-injection still works
+    // on Windows is a 6-line change vs leaving Windows users without
+    // claude-mem-equivalent pre-injection.
     #[cfg(target_os = "windows")]
     {
         let _ = api_url; // unused on this branch
-        let _ = client;
         eprintln!(
-            "  ⚠ Claude Code hooks: Windows support is not yet implemented. \
-             The MCP server entry is still configured — `restore_identity` \
-             works manually. Hook-based auto-injection arrives in v0.1.2."
+            "  ⚠ Claude Code UserPromptSubmit hook: Windows support is not \
+             yet implemented (bash script). SessionStart pre-injection is \
+             still registered — that's the load-bearing claude-mem-equivalent \
+             mechanic. Per-prompt memory injection arrives in v0.1.2 via a \
+             PowerShell variant."
         );
+        register_session_start_hook(client)?;
         return Ok(());
     }
 

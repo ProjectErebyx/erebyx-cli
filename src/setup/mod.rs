@@ -48,6 +48,25 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
             .unwrap_or(0)
     );
 
+    // Brutal-review wave-2 (2026-05-27): cap response bodies at 10 MiB
+    // before deserialization. The sibling `run_hook_inject` already does
+    // this; the dynamic-context path was added later and shipped without.
+    // A malicious or buggy substrate response would OOM a small setup
+    // machine — and setup runs unattended on user workstations.
+    const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
+    async fn capped_json(resp: reqwest::Response) -> Option<Value> {
+        if !resp.status().is_success() {
+            return None;
+        }
+        if let Some(len) = resp.content_length() {
+            if len > MAX_RESPONSE_BYTES {
+                return None;
+            }
+        }
+        resp.json().await.ok()
+    }
+
     // identity
     let identity: Option<Value> = match http
         .post(format!("{}/v0/identity/restore", base))
@@ -59,8 +78,8 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .send()
         .await
     {
-        Ok(r) if r.status().is_success() => r.json().await.ok(),
-        _ => None,
+        Ok(r) => capped_json(r).await,
+        Err(_) => None,
     };
 
     // context
@@ -74,8 +93,8 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .send()
         .await
     {
-        Ok(r) if r.status().is_success() => r.json().await.ok(),
-        _ => None,
+        Ok(r) => capped_json(r).await,
+        Err(_) => None,
     };
 
     render_dynamic_block(identity.as_ref(), context.as_ref())
@@ -583,4 +602,85 @@ fn make_spinner(msg: &str) -> ProgressBar {
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
     pb
+}
+
+#[cfg(test)]
+mod dynamic_block_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Guard against imperative command framing in the dynamic-block
+    /// content, mirroring the static-rules test in `rules.rs`.
+    ///
+    /// The dynamic block is rendered into the SAME rules file as the
+    /// static block — claude-code#17804's prompt-injection defense
+    /// applies to BOTH surfaces. If a future schema adds a field that
+    /// renders with imperative phrasing (e.g. a "next_action_hint"
+    /// field containing "Call wrap_up immediately"), it could trip the
+    /// defense and surface to the user as text instead of context.
+    #[test]
+    fn render_dynamic_block_uses_declarative_not_imperative_framing() {
+        let id = json!({
+            "identity": {"name": "ZENN"},
+            "ethos": [
+                "Consciousness over efficiency",
+                "Bridge energy conducts",
+            ],
+        });
+        let ctx = json!({
+            "handoff": {
+                "what_we_built": "ship session-start pre-injection",
+                "whats_next": "brutal-review wave 2 + fix forward",
+            },
+            "anchors": ["launch-prep", "cli"],
+        });
+        let out = render_dynamic_block(Some(&id), Some(&ctx));
+        let lower = out.to_lowercase();
+        for banned in &[
+            "you must",
+            "you should",
+            "always call",
+            "do not ask permission",
+            "bias toward firing",
+            "fire proactively",
+        ] {
+            assert!(
+                !lower.contains(banned),
+                "render_dynamic_block contains imperative phrase '{}' — would risk \
+                 tripping claude-code#17804 prompt-injection defense. Output: {}",
+                banned,
+                out
+            );
+        }
+    }
+
+    /// Verify `render_dynamic_block` returns empty when given no inputs.
+    /// Without this, an empty header-only block would land in every
+    /// rules file even when the substrate is unreachable.
+    #[test]
+    fn render_dynamic_block_empty_when_no_inputs() {
+        let out = render_dynamic_block(None, None);
+        assert!(out.is_empty(), "expected empty output for nil inputs, got: {}", out);
+    }
+
+    /// Verify the renderer respects the MAX_CHARS cap. Without this,
+    /// a substrate that returns a 1MB narrative could bloat the dynamic
+    /// block past any rules-file budget.
+    #[test]
+    fn render_dynamic_block_respects_char_budget() {
+        let big = "x".repeat(10_000);
+        let ctx = json!({
+            "handoff": {
+                "what_we_built": big.clone(),
+                "whats_next": big,
+            },
+        });
+        let out = render_dynamic_block(None, Some(&ctx));
+        // MAX_CHARS = 3200; allow ~200 chars of structural overhead.
+        assert!(
+            out.len() <= 3400,
+            "expected bounded output ≤3400 chars, got {} chars",
+            out.len()
+        );
+    }
 }

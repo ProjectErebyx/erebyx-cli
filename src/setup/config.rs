@@ -174,6 +174,31 @@ fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Res
 
 /// Continue YAML — current format. Top-level `mcpServers`, no nesting.
 fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+    // P0 (brutal-review wave-2 2026-05-27 CLI lane): apply the SAME
+    // git-tree credential guard the JSON path enforces. Continue users
+    // frequently sync `~/.continue/` to public dotfiles repos; without
+    // this guard, the YAML writer would silently leak the API key on
+    // the next commit. Same allowlisted override (`EREBYX_ALLOW_GIT_TREE_CONFIG`).
+    if is_within_git_tree(&client.config_path)
+        && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG")
+    {
+        anyhow::bail!(
+            "Refusing to write API key to {} — path is inside a git working \
+             tree. Set EREBYX_ALLOW_GIT_TREE_CONFIG=1 to override, or move \
+             your Continue config outside the tree.",
+            client.config_path.display()
+        );
+    }
+
+    // P0 (brutal-review wave-2): YAML-escape api_key + api_url before
+    // raw interpolation into the double-quoted YAML string. Real Erebyx
+    // keys are alphanumeric (`erebyx_<48 hex>`), but the contract isn't
+    // validated upstream — a key with `"` or `\` would silently produce
+    // invalid YAML. Use the YAML double-quoted-flow-scalar escape rules:
+    // backslash and double-quote each get a backslash prefix.
+    let api_key_escaped = api_key.replace('\\', "\\\\").replace('"', "\\\"");
+    let api_url_escaped = api_url.replace('\\', "\\\\").replace('"', "\\\"");
+
     // Read existing YAML if any. Continue's YAML is straightforward; we
     // do a string-level merge rather than depend on a yaml crate, to keep
     // the CLI dep footprint small and avoid reformatting user content.
@@ -183,20 +208,45 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     let entry = format!(
         "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n      EREBYX_INSTANCE_ID: \"default\"\n",
         cmd = erebyx_command(),
-        key = api_key,
-        url = api_url,
+        key = api_key_escaped,
+        url = api_url_escaped,
     );
 
     // If a top-level `mcpServers:` block exists, append our entry under
     // it. Otherwise, add the block at the end.
-    let new_content = if cleaned.contains("\nmcpServers:") || cleaned.starts_with("mcpServers:") {
-        // Find the block and insert after its `mcpServers:` line.
-        let marker = if cleaned.starts_with("mcpServers:") {
-            0
-        } else {
-            cleaned.find("\nmcpServers:").unwrap() + 1
-        };
-        let line_end = cleaned[marker..].find('\n').map(|i| marker + i + 1).unwrap_or(cleaned.len());
+    //
+    // P1 (brutal-review wave-2): the `\nmcpServers:` heuristic matches
+    // any line starting with `mcpServers:` — INCLUDING commented-out
+    // lines (`# mcpServers:`). Tighten by requiring the byte preceding
+    // `\n` is also the start of a "real" line (not after `# `). Cheap
+    // additional check.
+    let real_mcp_servers_start = if cleaned.starts_with("mcpServers:") {
+        Some(0usize)
+    } else {
+        // Scan for `\nmcpServers:` and verify the preceding line doesn't
+        // start with a comment marker. This is approximate; perfect
+        // YAML-aware parsing would require a yaml crate.
+        let mut search_from = 0;
+        loop {
+            let Some(rel) = cleaned[search_from..].find("\nmcpServers:") else {
+                break None;
+            };
+            let abs = search_from + rel + 1; // position of `m`
+            // Walk back to the start of THIS line to inspect any leading whitespace + `#`.
+            let line_start = cleaned[..abs].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let prefix = &cleaned[line_start..abs];
+            if !prefix.trim_start().starts_with('#') {
+                break Some(abs);
+            }
+            search_from = abs;
+        }
+    };
+
+    let new_content = if let Some(marker) = real_mcp_servers_start {
+        let line_end = cleaned[marker..]
+            .find('\n')
+            .map(|i| marker + i + 1)
+            .unwrap_or(cleaned.len());
         let mut out = String::with_capacity(cleaned.len() + entry.len() + 64);
         out.push_str(&cleaned[..line_end]);
         out.push_str(&format!("  # EREBYX-START\n{}  # EREBYX-END\n", entry));
@@ -219,6 +269,23 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     }
     std::fs::write(&client.config_path, new_content)
         .with_context(|| format!("Failed to write {}", client.config_path.display()))?;
+
+    // P0 (brutal-review wave-2): apply 0600 perms on Unix — the JSON
+    // writer does this via `write_json`; YAML writer was silently
+    // shipping world-readable. Real credential-leak surface for users
+    // on shared hosts.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&client.config_path, perms).with_context(|| {
+            format!(
+                "Failed to set permissions on {}",
+                client.config_path.display()
+            )
+        })?;
+    }
+
     Ok(client.config_path.clone())
 }
 

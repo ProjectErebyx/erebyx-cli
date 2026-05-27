@@ -583,9 +583,18 @@ async fn hook_inject() {
 async fn run_hook_inject() -> String {
     let empty = "{}".to_string();
 
-    // Read hook input from stdin.
+    // Read hook input from stdin with a hard 1 MiB cap.
+    //
+    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
+    // misconfigured Claude Code build (or pipe-redirection misuse)
+    // feeding gigabytes of stdin would OOM the binary before the 500ms
+    // HTTP timeout ever fires. Real UserPromptSubmit payloads are
+    // <16KB; capping at 1 MiB leaves >60x headroom while keeping OOM
+    // surface bounded.
+    const MAX_HOOK_STDIN_BYTES: u64 = 1 << 20; // 1 MiB
     let mut input = String::new();
-    if std::io::stdin().read_to_string(&mut input).is_err() {
+    let mut handle = std::io::stdin().take(MAX_HOOK_STDIN_BYTES);
+    if handle.read_to_string(&mut input).is_err() {
         return empty;
     }
 
