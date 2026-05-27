@@ -46,6 +46,26 @@ exec erebyx hook-inject 2>/dev/null || printf '%s' '{{}}'
 
 /// Install Claude Code hooks for automatic memory injection.
 pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result<()> {
+    // P1-4 (2026-05-27): the hook script uses bash + Unix path conventions.
+    // Claude Code on Windows doesn't invoke `.sh` files directly (it wants
+    // `.bat` / `.cmd` / `.ps1`). Pre-fix `erebyx setup` reported success on
+    // Windows while writing a script that never ran — customers thought
+    // hooks were installed and never received memory injection, with no
+    // error signal. v0.1.2 will ship the PowerShell variant; v0.1.1 punts
+    // cleanly with a clear message so the customer knows what landed and
+    // what didn't.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = api_url; // unused on this branch
+        let _ = client;
+        eprintln!(
+            "  ⚠ Claude Code hooks: Windows support is not yet implemented. \
+             The MCP server entry is still configured — `restore_identity` \
+             works manually. Hook-based auto-injection arrives in v0.1.2."
+        );
+        return Ok(());
+    }
+
     // Native hook handler — no python3 or external interpreter required.
 
     // Write the hook script
@@ -122,19 +142,39 @@ fn register_hook_in_settings(client: &AiClient, script_path: &PathBuf) -> Result
         .entry("UserPromptSubmit")
         .or_insert_with(|| serde_json::json!([]));
 
-    // Build and insert the hook entry
+    // Build and insert the hook entry with an explicit managed-marker so
+    // future re-runs only touch our own entries — not user-authored
+    // adjacent automation. P1-5 (2026-05-27): the prior substring filter
+    // (`c.contains("erebyx")`) would wipe ANY hook whose command mentioned
+    // erebyx (e.g. `~/bin/erebyx-archive-export`, custom helpers under
+    // `~/scripts/my-erebyx-extras.sh`). Customers writing their own
+    // erebyx-adjacent automation would lose it silently on the next
+    // `erebyx setup` run.
     let hook_entry = serde_json::json!({
         "type": "command",
-        "command": script_path.to_string_lossy()
+        "command": script_path.to_string_lossy(),
+        "_erebyx_managed": true
     });
 
     if let Some(arr) = user_prompt_hooks.as_array_mut() {
-        // Remove existing erebyx hooks before adding the current one
+        // Remove only entries we PREVIOUSLY installed. Accept three
+        // marker shapes for back-compat with v0.1.0 installs that
+        // didn't carry the explicit `_erebyx_managed` flag:
+        //   1. Explicit managed marker (current canon).
+        //   2. Exact-path match for `erebyx-memory-injector.sh`.
+        //   3. Exact `erebyx hook-inject` command string (legacy invocation).
+        // Anything else stays untouched — including custom user
+        // automation that happens to mention "erebyx" in its path.
         arr.retain(|h| {
-            !h.get("command")
-                .and_then(|c| c.as_str())
-                .map(|c| c.contains("erebyx"))
-                .unwrap_or(false)
+            let is_managed = h
+                .get("_erebyx_managed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_managed {
+                return false;
+            }
+            let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
+            !(cmd.ends_with("erebyx-memory-injector.sh") || cmd == "erebyx hook-inject")
         });
         arr.push(hook_entry);
     }
