@@ -26,16 +26,32 @@ pub fn print_response_with_hints(
     auto_fired: &[String],
 ) {
     if json_mode {
+        // CLI postfix-review P0-2 (2026-05-27): only wrap into an
+        // envelope when there are actual hints / auto_fired tokens to
+        // surface. The prior shape wrapped ANY non-object content as
+        // `{"content": ...}`, silently breaking customer scripts that
+        // used `--json | jq -r .` to extract a raw string. Preserve the
+        // bare-content shape when no hints — keep the envelope only
+        // when there's something to add.
+        if hints.is_empty() && auto_fired.is_empty() {
+            println!("{}", serde_json::to_string_pretty(content).unwrap_or_default());
+            return;
+        }
         let mut envelope = match content {
             Value::Object(_) => content.clone(),
             other => json!({ "content": other }),
         };
         if let Value::Object(ref mut map) = envelope {
+            // Use .entry().or_insert_with(...) so a tool that legitimately
+            // returns a `hints` or `auto_fired` field in its own body
+            // isn't silently clobbered.
             if !hints.is_empty() {
-                map.insert("hints".into(), json!(hints));
+                map.entry("hints".to_string())
+                    .or_insert_with(|| json!(hints));
             }
             if !auto_fired.is_empty() {
-                map.insert("auto_fired".into(), json!(auto_fired));
+                map.entry("auto_fired".to_string())
+                    .or_insert_with(|| json!(auto_fired));
             }
         }
         println!("{}", serde_json::to_string_pretty(&envelope).unwrap_or_default());

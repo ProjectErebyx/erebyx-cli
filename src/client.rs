@@ -249,13 +249,19 @@ impl ErebyxClient {
             }
         }
         // Capture lifecycle headers BEFORE .text() consumes the response.
-        // Honors EREBYX_HINTS_DISABLED env var as a per-call opt-out so
-        // the brutal-review-flagged "documented but unimplemented"
-        // protocol becomes "documented and honored at the CLI surface."
+        // Honors EREBYX_HINTS_DISABLED env var as a per-call opt-out.
+        // Truthiness matches the substrate's allowlist
+        // (core/api/middleware/erebyx_hints.py): {"1","true","yes"} only.
+        // Prior shape treated any non-"0" value as truthy → asymmetric
+        // with substrate, so `EREBYX_HINTS_DISABLED=false` would disable
+        // here but not server-side (CLI postfix-review P1-3).
         let hints_disabled = std::env::var("EREBYX_HINTS_DISABLED")
             .ok()
-            .filter(|v| !v.is_empty() && v != "0")
-            .is_some();
+            .map(|v| {
+                let v = v.trim().to_lowercase();
+                matches!(v.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(false);
         let (hints, auto_fired) = if hints_disabled {
             (Vec::new(), Vec::new())
         } else {
