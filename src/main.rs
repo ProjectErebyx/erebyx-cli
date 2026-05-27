@@ -7,6 +7,7 @@ mod setup;
 use anyhow::Result;
 use clap::Parser;
 use serde_json::{json, Value};
+use std::env;
 use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
@@ -28,9 +29,28 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Health => {
-            let client = ErebyxClient::new()?;
-            let result = client.health().await?;
-            print_response(&result, false, json_mode);
+            // P1-1 (2026-05-27): the first cold-touch command must work
+            // BEFORE the customer has run `erebyx setup` or set
+            // EREBYX_API_KEY. If no key is configured, hit the substrate's
+            // unauthenticated /health route directly so the customer can
+            // confirm reachability without paying for an API key first.
+            if env::var("EREBYX_API_KEY").is_err() {
+                let result = ErebyxClient::health_anonymous(None).await?;
+                if json_mode {
+                    print_response(&result, false, json_mode);
+                } else {
+                    print_response(&result, false, json_mode);
+                    println!();
+                    println!(
+                        "  {} no EREBYX_API_KEY configured — run `erebyx setup` to authenticate.",
+                        "•"
+                    );
+                }
+            } else {
+                let client = ErebyxClient::new()?;
+                let result = client.health().await?;
+                print_response(&result, false, json_mode);
+            }
         }
 
         Commands::Setup { api_key, api_url } => {
@@ -247,9 +267,40 @@ async fn mcp_serve() -> Result<()> {
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
 
-    while let Some(line) = reader.next_line().await? {
+    loop {
+        // P1-3 (2026-05-27): ride out transient I/O errors instead of
+        // killing the bridge. macOS Spaces switches / backgrounding can
+        // surface as Interrupted; only Ok(None) (clean EOF) or a hard
+        // error tears the loop down.
+        let line = match reader.next_line().await {
+            Ok(Some(l)) => l,
+            Ok(None) => break, // clean EOF
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.into()),
+        };
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+
+        // P1-2 (2026-05-27): JSON-RPC 2.0 §4.1 — a Notification is a
+        // Request without an `id`; the server MUST NOT respond. MCP uses
+        // notifications for `notifications/cancelled` and
+        // `notifications/initialized` etc. Claude Code's MCP client
+        // treats spurious responses to notifications as protocol
+        // violations and disconnects. Detect + fire-and-forget.
+        let parsed: Option<Value> = serde_json::from_str(trimmed).ok();
+        let is_notification = parsed
+            .as_ref()
+            .map(|v| v.get("id").is_none())
+            .unwrap_or(false);
+        if is_notification {
+            // Proxy upstream so the substrate sees the notification
+            // (e.g. `notifications/initialized` finishes the MCP handshake)
+            // but discard whatever the substrate sends back — spec says
+            // we MUST NOT echo a response.
+            let _ = client.proxy_jsonrpc(trimmed).await;
             continue;
         }
 
@@ -257,8 +308,8 @@ async fn mcp_serve() -> Result<()> {
             Ok(v) => v,
             Err(e) => json!({
                 "jsonrpc": "2.0",
-                "id": serde_json::from_str::<Value>(trimmed)
-                    .ok()
+                "id": parsed
+                    .as_ref()
                     .and_then(|v| v.get("id").cloned())
                     .unwrap_or(Value::Null),
                 "error": {

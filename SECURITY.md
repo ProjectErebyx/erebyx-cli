@@ -48,13 +48,44 @@ Out of scope:
 
 ---
 
+## API-key file handling (`erebyx setup`)
+
+`erebyx setup` writes your `EREBYX_API_KEY` in plaintext into each
+detected AI client's MCP config file (e.g. `~/.claude/settings.json`,
+`~/.cursor/mcp.json`). Specifics:
+
+- **Unix (macOS / Linux):** the CLI sets each written file's
+  permissions to `0600` (owner read/write only). Other local users
+  cannot read the key.
+- **Windows:** the CLI cannot set per-file ACLs without an extra
+  dependency in v0.1.1. Files inherit the parent directory's ACL —
+  typically user-profile-scoped on a single-user box, but **multi-user
+  hosts and roaming profiles are not protected**. The CLI emits a
+  one-line warning when it writes on Windows. Tighten the ACL
+  out-of-band (e.g. `icacls "%APPDATA%\Claude\settings.json"
+  /inheritance:r /grant:r "%USERNAME%:F"`) until v0.1.2 lands the
+  in-process fix.
+- **Git working trees:** the CLI refuses to write a config file whose
+  ancestor contains a `.git` directory unless you set
+  `EREBYX_ALLOW_GIT_TREE_CONFIG=1` explicitly. This prevents the
+  common footgun where users sync `~/.claude/` (or similar) to a
+  public dotfiles repo and unknowingly commit a credential. If your
+  workflow needs to write into a tracked path, set the env var AND
+  ensure the target is `.gitignore`'d.
+- **Rotation:** if a config file is ever committed to a public repo
+  or shared inadvertently, rotate your key immediately at
+  [app.erebyx.com/keys](https://app.erebyx.com/keys). The substrate
+  treats every key as a bearer credential.
+
 ## Known limitations + roadmap
 
 | Area | Current limitation | Target fix |
 |---|---|---|
 | Client-side encryption | Memory content currently encrypted server-side (per-tenant AES-256-GCM); transit is TLS 1.3. End-to-end client-side encryption (true zero-knowledge — server NEVER sees plaintext) is on the v0.2+ roadmap. The browser extension already implements client-side AES-256-GCM today. | v0.2+ |
+| Windows ACL hardening | v0.1.1 emits a warning instead of setting a user-only DACL on written configs. v0.1.2 will wire `windows-acl` or equivalent to close the multi-user-host gap. | v0.1.2 |
 | API-key rotation | Manual rotation via `app.erebyx.com/keys`; CLI does not yet auto-rotate | v0.2 |
 | Sandbox for `setup` writers | Config writers touch real client-config files; no dry-run mode | v0.1.x |
+| Keyring storage path | `setup` writes the API key directly into each client's MCP config. A future `EREBYX_API_KEY_FILE` + OS-keyring path will keep the key out of the config files entirely. | v0.1.2 |
 
 ---
 

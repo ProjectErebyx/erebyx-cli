@@ -254,9 +254,44 @@ fn read_json_or_empty(path: &PathBuf) -> Result<Value> {
     }
 }
 
+/// True if `path` lives inside a git working tree (any ancestor contains
+/// a `.git` directory or file). Bool, not Result — a stat failure on an
+/// ancestor is treated as "not in a tree" (fail-soft so unrelated
+/// permission errors don't block legitimate writes).
+fn is_within_git_tree(path: &std::path::Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        let dot_git = ancestor.join(".git");
+        dot_git.exists()
+    })
+}
+
 /// Write JSON to a file with pretty formatting.
-/// Sets 0600 permissions (owner read/write only) since configs contain API keys.
+///
+/// On Unix, sets 0600 (owner read/write only) so the embedded API key is
+/// not world-readable. On Windows, file permissions inherit the parent
+/// directory's ACL — typically user-profile-scoped but not guaranteed.
+/// Emits a one-line warning so the user knows the difference.
+///
+/// Refuses to write inside a git working tree without an explicit
+/// `EREBYX_ALLOW_GIT_TREE_CONFIG=1` override. Many users sync
+/// `~/.claude/` and similar dotfiles to public repos; silently writing
+/// an API key into those would leak credentials at next `git add .`.
 fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
+    // Refuse to write a credential-bearing config inside a git working
+    // tree unless the user has explicitly opted in. This catches the
+    // public-dotfiles-repo footgun before it lands a credential in
+    // version control.
+    if is_within_git_tree(path) && std::env::var("EREBYX_ALLOW_GIT_TREE_CONFIG").is_err() {
+        anyhow::bail!(
+            "Refusing to write API key to {} — path is inside a git working \
+             tree. Many users sync their config dirs to public repos; a \
+             plaintext API key there would leak on the next commit. Set \
+             EREBYX_ALLOW_GIT_TREE_CONFIG=1 to override, or move your \
+             client config outside the tree.",
+            path.display()
+        );
+    }
+
     let content = serde_json::to_string_pretty(value)
         .context("Failed to serialize JSON")?;
     std::fs::write(path, &content)
@@ -269,6 +304,21 @@ fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(path, perms)
             .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+    }
+    // P0-4 (2026-05-27): Windows has no portable in-process way to set a
+    // user-only DACL without an extra dependency. Document the gap so a
+    // Windows operator running `erebyx setup` sees the warning and can
+    // tighten permissions out-of-band. The file lands at %APPDATA% or
+    // %USERPROFILE% by default, which is already user-profile-scoped on a
+    // single-user box — the risk is multi-user Windows hosts and roaming
+    // profiles. A future v0.1.2 will wire `windows-acl` to close this.
+    #[cfg(windows)]
+    {
+        eprintln!(
+            "  ⚠ {}: file permissions cannot be auto-restricted on Windows. \
+             Confirm %APPDATA% is not world-readable.",
+            path.display()
+        );
     }
 
     Ok(())

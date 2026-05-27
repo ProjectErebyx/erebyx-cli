@@ -397,6 +397,45 @@ impl ErebyxClient {
         serde_json::from_str(&body).context("Invalid JSON in MCP response")
     }
 
+    /// Anonymous server-reachability probe — no API key required.
+    ///
+    /// The substrate's `/health` route is intentionally unauthenticated so
+    /// monitoring + first-touch reachability checks work without a key.
+    /// This static helper exists so `erebyx health` and `erebyx doctor` can
+    /// answer "is the substrate up?" BEFORE the user has run `erebyx setup`
+    /// or set `EREBYX_API_KEY`.
+    ///
+    /// `api_url` defaults to `https://core.erebyx.com` if `EREBYX_API_URL`
+    /// is unset.
+    pub async fn health_anonymous(api_url: Option<&str>) -> Result<Value> {
+        let base = match api_url {
+            Some(u) => u.to_string(),
+            None => env::var("EREBYX_API_URL")
+                .unwrap_or_else(|_| "https://core.erebyx.com".to_string()),
+        };
+        let url = format!("{}/health", base.trim_end_matches('/'));
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .context("Failed to build HTTP client")?;
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to connect to Erebyx")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("Health endpoint returned HTTP {}", status);
+        }
+        response
+            .json::<Value>()
+            .await
+            .context("Invalid JSON from health endpoint")
+    }
+
     /// Check server health via GET /health
     pub async fn health(&self) -> Result<Value> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
