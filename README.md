@@ -34,7 +34,7 @@ That's the whole loop: install -> setup -> save -> remember. Memory follows you 
 | `remember` | Find what you know by meaning |
 | `wrap-up` | Create a session handoff at the end |
 
-Substrate behavior (atomization, retrieval, dream cycle, encryption) lives behind the API — you never need to think about it.
+All processing — memory understanding, recall, organization, encryption — lives behind the API — you never need to think about it.
 
 ---
 

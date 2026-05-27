@@ -81,7 +81,7 @@ PRs that touch the wire protocol (`client.rs`) require an extra reviewer.
 
 The CLI surfaces the v0.1.1 cognitive verbs: `restore-identity`, `load-context`, `save`, `remember`, `wrap-up` plus operational commands (`setup`, `doctor`, `health`, `context`).
 
-Substrate behavior (atomization, retrieval, dream cycle, encryption) lives in the closed-source `erebyx-os` engine. Client-side issues — install UX, MCP config writers, output formatting, error messages, `X-Erebyx-Hint` parsing — are in scope here.
+All EREBYX processing — memory understanding, recall, organization, encryption — lives in the closed-source `erebyx-os` engine. Client-side issues — install UX, MCP config writers, output formatting, error messages, `X-Erebyx-Hint` parsing — are in scope here.
 
 Out of scope: anything that would require a substrate change. File those as issues on `erebyx-os` instead.
 
