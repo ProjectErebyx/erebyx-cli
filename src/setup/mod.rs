@@ -13,6 +13,7 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{Confirm, Password};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 
 use detect::{detect_clients, AiClient};
 
@@ -134,6 +135,10 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     let mut success_count = 0;
     let mut errors: Vec<String> = Vec::new();
     let mut has_claude_code = false;
+    // Trust-by-showing-work: collect every path setup touches so the
+    // final screen can list them. Fly Launch pattern per
+    // ADOPTION_MECHANICS_RESEARCH.md §1.
+    let mut paths_touched: Vec<(String, PathBuf)> = Vec::new();
 
     for client in &to_configure {
         pb.set_message(format!("Configuring {}...", client.name));
@@ -141,14 +146,21 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
         // Write MCP server config
         match config::write_mcp_config(client, &api_key, &api_url) {
             Ok(path) => {
+                paths_touched.push((format!("{} config", client.name), path.clone()));
                 // Write rules file
                 match rules::write_rules_file(client) {
-                    Ok(_rules_path) => {
+                    Ok(rules_path) => {
+                        paths_touched.push((format!("{} rules", client.name), rules_path));
                         // Install hooks (Claude Code only)
                         if client.kind == detect::ClientKind::ClaudeCode {
                             has_claude_code = true;
                             match hooks::install_hooks(client, &api_key, &api_url) {
-                                Ok(_) => {}
+                                Ok(_) => {
+                                    paths_touched.push((
+                                        "Claude Code hook script".to_string(),
+                                        client.home_dir.join("hooks").join("erebyx-memory-injector.sh"),
+                                    ));
+                                }
                                 Err(e) => {
                                     errors.push(format!(
                                         "{}: hooks failed ({}), config OK",
@@ -197,6 +209,21 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
         }
     }
 
+    // Files written — show every path setup touched so the user knows
+    // what's on their disk + can audit / revert by hand. Fly Launch +
+    // Vercel CLI pattern: trust by showing the work.
+    if !paths_touched.is_empty() {
+        println!();
+        println!("  {}", "Files written:".bold());
+        for (label, path) in &paths_touched {
+            println!(
+                "  • {} — {}",
+                label.dimmed(),
+                path.display().to_string().dimmed()
+            );
+        }
+    }
+
     println!();
     println!("  {}", "What happens now:".bold());
     println!("  • Your AI tools will have access to Erebyx memory tools");
@@ -218,6 +245,23 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
                 .dimmed()
         );
     }
+
+    // Try it out — Stripe CLI pattern. Give the user a concrete next
+    // command + an example prompt so the time-to-first-value moment is
+    // unmistakable.
+    println!();
+    println!("  {}", "Try it out:".bold());
+    println!("  1. Restart your AI client(s) so the new MCP server loads.");
+    println!("  2. In your AI, paste a prompt like:");
+    println!();
+    println!(
+        "       {}",
+        "\"Save that I'm setting up Erebyx, category: identity\"".cyan()
+    );
+    println!();
+    println!("  3. Then ask:");
+    println!();
+    println!("       {}", "\"What did I last save?\"".cyan());
 
     println!();
     println!(

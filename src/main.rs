@@ -74,32 +74,150 @@ async fn run(cli: Cli) -> Result<()> {
         }
 
         Commands::Doctor => {
-            // Quick health check + client detection
+            // Full named-check series: environment / auth / MCP / clients
+            // / hook. Per ADOPTION_MECHANICS_RESEARCH.md §3: a doctor
+            // command structured as named checks (success/warning/error)
+            // is the single biggest support-load reducer at launch.
+            //
+            // Each check is read-only (no side effects against the user's
+            // substrate state). A separate --roundtrip flag in v0.1.2
+            // will issue a save + remember to verify the loop end-to-end;
+            // it's gated because save creates a memory the user didn't
+            // ask for.
+            use std::io::Write;
+            let mut total_pass = 0u32;
+            let mut total_warn = 0u32;
+            let mut total_fail = 0u32;
+            let mut report = |status: char, name: &str, msg: &str| {
+                match status {
+                    '✓' => total_pass += 1,
+                    '⚠' => total_warn += 1,
+                    '✗' => total_fail += 1,
+                    _ => {}
+                };
+                println!("    {} {}{}", status, name, if msg.is_empty() { "".to_string() } else { format!(": {}", msg) });
+                let _ = std::io::stdout().flush();
+            };
+
             println!();
-            println!("  • Checking Erebyx...");
+            println!("  Erebyx Doctor — named checks");
+            println!();
 
-            // Check server
-            match ErebyxClient::new() {
-                Ok(client) => match client.health().await {
-                    Ok(_) => println!("  ✓ Server: connected"),
-                    Err(e) => println!("  ✗ Server: {}", e),
-                },
-                Err(e) => println!("  ✗ Server: {} (set EREBYX_API_KEY)", e),
+            // === Section 1: Environment ===
+            println!("  Environment");
+            let api_key = std::env::var("EREBYX_API_KEY").ok();
+            match api_key.as_deref() {
+                Some(k) if k.starts_with("erebyx_") && k.len() >= 32 => {
+                    let preview = format!("{}…", &k[..10]);
+                    report('✓', "EREBYX_API_KEY", &format!("set ({})", preview));
+                }
+                Some(_) => {
+                    report('⚠', "EREBYX_API_KEY", "set but format doesn't match `erebyx_<48 hex chars>` — may not authenticate");
+                }
+                None => {
+                    report('✗', "EREBYX_API_KEY", "unset — get one at https://app.erebyx.com/keys");
+                }
             }
+            let api_url = std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+            report('✓', "EREBYX_API_URL", &api_url);
+            println!();
 
-            // Check clients
+            // === Section 2: Authentication ===
+            println!("  Authentication");
+            if api_key.is_none() {
+                report('✗', "Substrate auth", "skipped — EREBYX_API_KEY unset");
+            } else {
+                match ErebyxClient::new() {
+                    Ok(client) => match client.health().await {
+                        Ok(_) => report('✓', "Substrate reachable + key accepted", ""),
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {
+                                report('✗', "Substrate auth", "rejected (401) — API key may be revoked or wrong tenant");
+                            } else {
+                                report('✗', "Substrate reachable", &msg);
+                            }
+                        }
+                    },
+                    Err(e) => report('✗', "Client init", &e.to_string()),
+                }
+            }
+            println!();
+
+            // === Section 3: MCP server binary ===
+            println!("  MCP server");
+            let self_bin = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "(unknown)".to_string());
+            report('✓', "erebyx binary", &self_bin);
+            report('✓', "erebyx mcp-serve", "available as subcommand");
+            println!();
+
+            // === Section 4: Detected AI clients ===
+            println!("  Clients");
             let clients = setup::detect::detect_clients();
             if clients.is_empty() {
-                println!("  ✗ No AI clients detected");
+                report('⚠', "No supported AI clients detected", "install Claude Code, Cursor, Windsurf, Continue, Zed, or VS Code");
             } else {
                 for client in &clients {
-                    let status = if client.config_exists {
-                        format!("{} configured", "✓")
+                    if client.config_exists {
+                        report('✓', client.name, "configured");
                     } else {
-                        format!("{} not configured (run `erebyx setup`)", "✗")
-                    };
-                    println!("  • {}: {}", client.name, status);
+                        report('⚠', client.name, "detected but not configured (run `erebyx setup`)");
+                    }
                 }
+            }
+            println!();
+
+            // === Section 5: Hook script (Claude Code only) ===
+            let claude_client = clients
+                .iter()
+                .find(|c| matches!(c.kind, setup::detect::ClientKind::ClaudeCode));
+            if let Some(cc) = claude_client {
+                println!("  Hook (Claude Code)");
+                let hook_path = cc.home_dir.join("hooks").join("erebyx-memory-injector.sh");
+                if !hook_path.exists() {
+                    report('⚠', "Hook script", &format!("missing ({}) — run `erebyx setup` to install", hook_path.display()));
+                } else {
+                    report('✓', "Hook script", &hook_path.display().to_string());
+                    // Check executable bit on Unix
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        match std::fs::metadata(&hook_path) {
+                            Ok(meta) => {
+                                let mode = meta.permissions().mode() & 0o777;
+                                if mode & 0o100 == 0 {
+                                    report('⚠', "Hook executable bit", &format!("mode {:o} — should be 0700 (owner exec)", mode));
+                                } else {
+                                    report('✓', "Hook executable bit", &format!("mode {:o}", mode));
+                                }
+                            }
+                            Err(e) => report('⚠', "Hook permissions", &e.to_string()),
+                        }
+                    }
+                }
+                println!();
+            }
+
+            // === Summary ===
+            println!(
+                "  Summary: {} passing, {} warning{}, {} failure{}",
+                total_pass,
+                total_warn,
+                if total_warn == 1 { "" } else { "s" },
+                total_fail,
+                if total_fail == 1 { "" } else { "s" },
+            );
+            if total_fail > 0 {
+                println!();
+                println!("  Next: address the ✗ items above, then re-run `erebyx doctor`.");
+            } else if total_warn > 0 {
+                println!();
+                println!("  Next: ⚠ items are non-blocking but worth fixing for a complete setup.");
+            } else {
+                println!();
+                println!("  All checks passing — substrate, clients, and hooks are wired.");
             }
             println!();
         }
