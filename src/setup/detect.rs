@@ -81,10 +81,24 @@ pub fn detect_clients() -> Vec<AiClient> {
         });
     }
 
-    // Continue: ~/.continue/ directory
+    // Continue: ~/.continue/ directory.
+    // Continue migrated from config.json (legacy) to config.yaml (current,
+    // ~2026-Q1). The legacy file uses `experimental.mcpServers`; the new
+    // YAML file uses top-level `mcpServers`. We prefer config.yaml if both
+    // exist, write to whichever the user already has, and default to YAML
+    // for fresh installs.
     let continue_dir = home.join(".continue");
     if continue_dir.is_dir() {
-        let config_path = continue_dir.join("config.json");
+        let yaml_path = continue_dir.join("config.yaml");
+        let json_path = continue_dir.join("config.json");
+        let config_path = if yaml_path.exists() {
+            yaml_path
+        } else if json_path.exists() {
+            json_path
+        } else {
+            // Fresh install — bias to the current YAML format.
+            yaml_path
+        };
         clients.push(AiClient {
             kind: ClientKind::Continue,
             name: "Continue",
@@ -95,7 +109,13 @@ pub fn detect_clients() -> Vec<AiClient> {
         });
     }
 
-    // Zed: ~/.config/zed/ directory
+    // Zed: ~/.config/zed/ directory.
+    // Rules path corrected 2026-05-27: Zed's prompt library lives at
+    // ~/.config/zed/prompts/ (per https://zed.dev/docs/ai/rules and
+    // https://zed.dev/docs/extensions/slash-commands). The earlier path
+    // ~/.config/zed/rules/ was wishful-thinking — Zed wrote files there
+    // and silently never read them. Affected users: any Zed install that
+    // ran `erebyx setup` before this fix shipped.
     let zed_dir = home.join(".config").join("zed");
     if zed_dir.is_dir() {
         let config_path = zed_dir.join("settings.json");
@@ -104,7 +124,7 @@ pub fn detect_clients() -> Vec<AiClient> {
             name: "Zed",
             config_exists: has_erebyx_mcp_config(&config_path),
             config_path,
-            rules_path: zed_dir.join("rules").join("erebyx-memory.md"),
+            rules_path: zed_dir.join("prompts").join("erebyx-memory.md"),
             home_dir: zed_dir,
         });
     }
