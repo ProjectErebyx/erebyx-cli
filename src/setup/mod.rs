@@ -13,9 +13,154 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{Confirm, Password};
 use indicatif::{ProgressBar, ProgressStyle};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use detect::{detect_clients, AiClient};
+
+/// Fetch the substrate's `restore_identity` + `load_context` summary
+/// payloads and render a compact pre-injection text suitable for the
+/// dynamic block of every detected client's rules file.
+///
+/// Mirrors `render_session_start_injection` in `main.rs` so the
+/// always-loaded rules-file content (model-agnostic) matches what the
+/// native SessionStart hook (Claude-Code-only fast path) emits.
+///
+/// **Fail-open everywhere**: returns an empty string on any error.
+/// Setup never refuses to complete because a single API call failed.
+async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let base = api_url.trim_end_matches('/');
+    // Setup-time session id — informational only; setup isn't a long-
+    // lived session, so a simple per-install token is fine. Format
+    // matches what the substrate expects (opaque string).
+    let session = format!(
+        "setup-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+
+    // identity
+    let identity: Option<Value> = match http
+        .post(format!("{}/v0/identity/restore", base))
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .header("X-Instance-ID", "default")
+        .header("X-Erebyx-Session-Id", &session)
+        .json(&json!({"detail_level": "summary", "limit": 5}))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.ok(),
+        _ => None,
+    };
+
+    // context
+    let context: Option<Value> = match http
+        .post(format!("{}/v0/session/load", base))
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .header("X-Instance-ID", "default")
+        .header("X-Erebyx-Session-Id", &session)
+        .json(&json!({"anchors": [], "detail_level": "summary"}))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.ok(),
+        _ => None,
+    };
+
+    render_dynamic_block(identity.as_ref(), context.as_ref())
+}
+
+/// Render the dynamic-block content from substrate identity + context
+/// payloads. Declarative phrasing throughout — matches
+/// `rules_content_uses_declarative_not_imperative_framing` doctrine.
+fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> String {
+    let mut lines = Vec::new();
+    lines.push("# Current substrate state (refreshed at install time)".to_string());
+    let mut chars = lines[0].len();
+    const MAX_CHARS: usize = 3200;
+
+    if let Some(id) = identity {
+        let name = id
+            .get("identity")
+            .and_then(|i| i.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+        if !name.is_empty() {
+            let line = format!("\nStored identity: {}", name);
+            chars += line.len();
+            lines.push(line);
+        }
+        let ethos = id
+            .get("ethos")
+            .and_then(|e| e.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for statement in ethos.iter().take(3) {
+            let trimmed: String = statement.chars().take(180).collect();
+            let line = format!("- ethos: {}", trimmed);
+            if chars + line.len() < MAX_CHARS {
+                chars += line.len();
+                lines.push(line);
+            }
+        }
+    }
+
+    if let Some(ctx) = context {
+        let handoff = ctx.get("handoff").or_else(|| ctx.get("continuity"));
+        if let Some(h) = handoff {
+            let what = h.get("what_we_built").and_then(|v| v.as_str()).unwrap_or("");
+            let next = h.get("whats_next").and_then(|v| v.as_str()).unwrap_or("");
+            if !what.is_empty() || !next.is_empty() {
+                lines.push("\nLast session handoff:".to_string());
+                if !what.is_empty() {
+                    let snippet: String = what.chars().take(600).collect();
+                    let line = format!("- built: {}", snippet);
+                    if chars + line.len() < MAX_CHARS {
+                        chars += line.len();
+                        lines.push(line);
+                    }
+                }
+                if !next.is_empty() {
+                    let snippet: String = next.chars().take(600).collect();
+                    let line = format!("- next:  {}", snippet);
+                    if chars + line.len() < MAX_CHARS {
+                        chars += line.len();
+                        lines.push(line);
+                    }
+                }
+            }
+        }
+        let anchors = ctx
+            .get("anchors")
+            .and_then(|a| a.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !anchors.is_empty() {
+            let joined = anchors.iter().take(5).copied().collect::<Vec<_>>().join(", ");
+            let line = format!("Recent anchors: {}", joined);
+            if chars + line.len() < MAX_CHARS {
+                lines.push(line);
+            }
+        }
+    }
+
+    // Only the header? Nothing useful — return empty.
+    if lines.len() <= 1 {
+        return String::new();
+    }
+    lines.join("\n")
+}
 
 /// Run the interactive setup flow.
 pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Result<()> {
@@ -191,6 +336,27 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     }
 
     pb.finish_and_clear();
+
+    // Step 4.5: Fetch + write the dynamic context block into each
+    // configured client's rules file. This is the model-agnostic
+    // pre-injection mechanism: clients without a native SessionStart
+    // hook (Windsurf, Continue, Zed, VS Code/Copilot) get fresh
+    // identity + handoff context via the always-loaded rules file.
+    // Fail-open: if the substrate call fails, dynamic_content is
+    // empty and `write_dynamic_block` becomes a no-op per-file.
+    if !to_configure.is_empty() {
+        let dynamic_content = fetch_dynamic_context(&api_key, &api_url).await;
+        if !dynamic_content.is_empty() {
+            for client in &to_configure {
+                if let Err(e) = rules::write_dynamic_block(client, &dynamic_content) {
+                    errors.push(format!(
+                        "{}: dynamic-block write skipped ({})",
+                        client.name, e
+                    ));
+                }
+            }
+        }
+    }
 
     // Step 5: Summary
     println!();

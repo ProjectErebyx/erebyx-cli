@@ -112,6 +112,78 @@ fn format_with_markers(content: &str) -> String {
     )
 }
 
+/// Write the dynamic context block — fresh identity + last handoff
+/// pulled from the substrate at setup time. Sits ALONGSIDE the static
+/// EREBYX:START block in each client's rules file. Markers are
+/// `<!-- EREBYX:DYNAMIC:START -->` / `<!-- EREBYX:DYNAMIC:END -->`.
+///
+/// **Why a separate block:** the static block describes the substrate's
+/// 5-tool surface declaratively (verb-by-verb, never changes). The
+/// dynamic block carries SESSION-SPECIFIC context that changes with
+/// every handoff. Keeping them separate means `erebyx setup` re-runs
+/// can refresh just the dynamic portion without touching the static
+/// instructions.
+///
+/// **Model-agnostic pre-injection:** for clients without a native
+/// SessionStart hook (Windsurf, Continue, Zed, VS Code/Copilot), this
+/// block IS the pre-injection mechanism — the rules file is always
+/// loaded into the system prompt, so fresh content here = always-fresh
+/// context for every session.
+///
+/// Idempotent: any pre-existing dynamic block is removed before the
+/// new one is written.
+///
+/// **Fail-open**: if `dynamic_content` is empty (substrate unreachable,
+/// onboarding not complete, etc), the function still RUNS but writes
+/// an empty marked block. That way subsequent refreshes can populate
+/// the same slot without restructuring the file.
+pub fn write_dynamic_block(client: &AiClient, dynamic_content: &str) -> Result<()> {
+    if !client.rules_path.exists() {
+        // No rules file yet — nothing to attach the dynamic block to.
+        // Skip rather than create a file with only the dynamic section
+        // (the static block is the load-bearing context).
+        return Ok(());
+    }
+
+    let existing = std::fs::read_to_string(&client.rules_path)
+        .with_context(|| format!("Failed to read {}", client.rules_path.display()))?;
+
+    let cleaned = remove_dynamic_section(&existing);
+
+    let marked = format!(
+        "<!-- EREBYX:DYNAMIC:START -->\n{}\n<!-- EREBYX:DYNAMIC:END -->",
+        dynamic_content.trim(),
+    );
+
+    // Append the dynamic block AFTER the static block — keeps the
+    // declarative tool descriptions on top, situational context below.
+    let new_content = format!("{}\n\n{}\n", cleaned.trim_end(), marked);
+
+    std::fs::write(&client.rules_path, &new_content)
+        .with_context(|| format!("Failed to write {}", client.rules_path.display()))?;
+
+    Ok(())
+}
+
+/// Strip a previous EREBYX:DYNAMIC:START/END block from rules-file content.
+/// Mirrors `remove_erebyx_section` but for the dynamic markers.
+fn remove_dynamic_section(content: &str) -> String {
+    if let (Some(start), Some(end)) = (
+        content.find("<!-- EREBYX:DYNAMIC:START -->"),
+        content.find("<!-- EREBYX:DYNAMIC:END -->"),
+    ) {
+        if start > end {
+            return content.to_string();
+        }
+        let end = end + "<!-- EREBYX:DYNAMIC:END -->".len();
+        let before = &content[..start];
+        let after = &content[end..];
+        format!("{}{}", before.trim_end(), after.trim_start())
+    } else {
+        content.to_string()
+    }
+}
+
 /// Remove existing EREBYX section from a file's content.
 fn remove_erebyx_section(content: &str) -> String {
     if let (Some(start), Some(end)) = (
@@ -201,6 +273,72 @@ mod tests {
                 banned
             );
         }
+    }
+
+    /// Verify `write_dynamic_block` writes a `<!-- EREBYX:DYNAMIC -->`
+    /// block alongside the existing static block, and that re-running
+    /// with new content replaces (doesn't accumulate) the prior block.
+    #[test]
+    fn dynamic_block_writes_alongside_static_and_is_idempotent() {
+        use std::io::Write;
+        let tmpdir = std::env::temp_dir().join(format!(
+            "erebyx-dyn-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let rules_path = tmpdir.join("erebyx-memory.md");
+
+        // Pre-seed with a static EREBYX:START block (what `erebyx setup`
+        // writes first).
+        let mut f = std::fs::File::create(&rules_path).unwrap();
+        writeln!(
+            f,
+            "<!-- EREBYX:START -->\nstatic content here\n<!-- EREBYX:END -->"
+        )
+        .unwrap();
+        drop(f);
+
+        let client = AiClient {
+            kind: ClientKind::ClaudeCode,
+            name: "Test",
+            config_path: tmpdir.join("settings.json"),
+            rules_path: rules_path.clone(),
+            config_exists: false,
+            home_dir: tmpdir.clone(),
+        };
+
+        // Write dynamic block — should appear AFTER the static block.
+        write_dynamic_block(&client, "Stored identity: ZENN\nLast handoff: shipped session-start hook").unwrap();
+        let content = std::fs::read_to_string(&rules_path).unwrap();
+        assert!(content.contains("<!-- EREBYX:START -->"), "static block survived");
+        assert!(content.contains("<!-- EREBYX:DYNAMIC:START -->"), "dynamic block written");
+        assert!(content.contains("Stored identity: ZENN"), "dynamic content present");
+        // Order: STATIC must come before DYNAMIC.
+        let static_pos = content.find("<!-- EREBYX:START -->").unwrap();
+        let dynamic_pos = content.find("<!-- EREBYX:DYNAMIC:START -->").unwrap();
+        assert!(
+            static_pos < dynamic_pos,
+            "static block must precede dynamic block"
+        );
+
+        // Re-write dynamic block with new content — should REPLACE, not duplicate.
+        write_dynamic_block(&client, "Stored identity: ZENN\nLast handoff: dynamic refresh works").unwrap();
+        let content2 = std::fs::read_to_string(&rules_path).unwrap();
+        let dynamic_starts = content2.matches("<!-- EREBYX:DYNAMIC:START -->").count();
+        assert_eq!(dynamic_starts, 1, "expected exactly one EREBYX:DYNAMIC:START, got {}", dynamic_starts);
+        assert!(
+            content2.contains("dynamic refresh works"),
+            "new content present"
+        );
+        assert!(
+            !content2.contains("shipped session-start hook"),
+            "old content removed"
+        );
+
+        std::fs::remove_dir_all(&tmpdir).unwrap();
     }
 
     /// Guard against imperative command framing.
