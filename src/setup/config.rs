@@ -254,15 +254,82 @@ fn read_json_or_empty(path: &PathBuf) -> Result<Value> {
     }
 }
 
-/// True if `path` lives inside a git working tree (any ancestor contains
-/// a `.git` directory or file). Bool, not Result — a stat failure on an
-/// ancestor is treated as "not in a tree" (fail-soft so unrelated
-/// permission errors don't block legitimate writes).
+/// True if `path` lives inside a git working tree we should refuse to
+/// write a credential into.
+///
+/// **Brutal-review POSTFIX_CLI P0-A (2026-05-27):** the prior
+/// implementation walked the literal ancestors and matched any `.git`
+/// existence — three problems:
+///
+/// 1. **`$HOME` false-positive.** Many developers keep their home as a
+///    git-managed dotfiles repo (`yadm`, `chezmoi --bare`, manual
+///    `git init` in `~`). Walking ancestors hits `~/.git/` and bails
+///    on every legitimate `~/.claude/settings.json` write. The override
+///    env var was a setup-time discovery problem — users couldn't read
+///    the error message until they hit it.
+/// 2. **Symlink miss.** If `~/.claude` symlinks into a synced dotfiles
+///    repo, the literal path walk MISSES the git tree — exactly the
+///    footgun this check was supposed to catch.
+/// 3. **Type imprecision.** `.git` can be a file (worktrees,
+///    submodules) or a directory; the check accepted any kind.
+///
+/// New behavior:
+/// - Canonicalize the path first so symlinked dotfiles get resolved.
+/// - Require `.git` to be a directory or a file (matches real
+///   worktree/submodule layout).
+/// - If the matching ancestor IS `$HOME`, treat it as the dotfiles-
+///   bare-repo case and ALLOW unless the user explicitly opted into
+///   refusing it via `EREBYX_REFUSE_HOME_DOTFILES=1`.
 fn is_within_git_tree(path: &std::path::Path) -> bool {
-    path.ancestors().any(|ancestor| {
+    // Resolve symlinks. The synced-dotfiles footgun is precisely the
+    // case where the literal path doesn't contain `.git` but the
+    // resolved path does.
+    let canonical = path
+        .canonicalize()
+        .or_else(|_| {
+            // Path may not exist yet (we're about to write it).
+            // Resolve the parent dir and re-attach the basename.
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+            let resolved_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+            let basename = path.file_name().unwrap_or_default();
+            Ok::<std::path::PathBuf, std::io::Error>(resolved_parent.join(basename))
+        })
+        .unwrap_or_else(|_| path.to_path_buf());
+
+    let home = dirs::home_dir();
+    let refuse_home = env_flag_truthy("EREBYX_REFUSE_HOME_DOTFILES");
+
+    for ancestor in canonical.ancestors() {
         let dot_git = ancestor.join(".git");
-        dot_git.exists()
-    })
+        if !dot_git.is_dir() && !dot_git.is_file() {
+            continue;
+        }
+        // Special-case $HOME: a bare `git init` in $HOME is intentional
+        // dotfiles workflow, not the synced-public-repo footgun.
+        // Refuse only when the user explicitly asks.
+        if let Some(h) = home.as_deref() {
+            if h == ancestor {
+                return refuse_home;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// True iff the env var is set to a truthiness allowlist value
+/// (`"1" | "true" | "yes"`, case-insensitive, trimmed). Matches the
+/// substrate's canonical pattern.
+///
+/// **Brutal-review POSTFIX_CLI P1-A:** the prior `is_err()`-only check
+/// treated `EREBYX_ALLOW_GIT_TREE_CONFIG=0` as a bypass — opposite of
+/// what the user expects. This helper enforces the strict allowlist
+/// across all CLI env-var toggles.
+fn env_flag_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
 }
 
 /// Write JSON to a file with pretty formatting.
@@ -270,7 +337,8 @@ fn is_within_git_tree(path: &std::path::Path) -> bool {
 /// On Unix, sets 0600 (owner read/write only) so the embedded API key is
 /// not world-readable. On Windows, file permissions inherit the parent
 /// directory's ACL — typically user-profile-scoped but not guaranteed.
-/// Emits a one-line warning so the user knows the difference.
+/// Emits a one-line warning (once per process) so the user knows the
+/// difference.
 ///
 /// Refuses to write inside a git working tree without an explicit
 /// `EREBYX_ALLOW_GIT_TREE_CONFIG=1` override. Many users sync
@@ -278,10 +346,10 @@ fn is_within_git_tree(path: &std::path::Path) -> bool {
 /// an API key into those would leak credentials at next `git add .`.
 fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
     // Refuse to write a credential-bearing config inside a git working
-    // tree unless the user has explicitly opted in. This catches the
-    // public-dotfiles-repo footgun before it lands a credential in
-    // version control.
-    if is_within_git_tree(path) && std::env::var("EREBYX_ALLOW_GIT_TREE_CONFIG").is_err() {
+    // tree unless the user has explicitly opted in. The truthiness
+    // check uses the {"1","true","yes"} allowlist so that
+    // `EREBYX_ALLOW_GIT_TREE_CONFIG=0` does NOT bypass the guard.
+    if is_within_git_tree(path) && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG") {
         anyhow::bail!(
             "Refusing to write API key to {} — path is inside a git working \
              tree. Many users sync their config dirs to public repos; a \
@@ -308,17 +376,32 @@ fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
     // P0-4 (2026-05-27): Windows has no portable in-process way to set a
     // user-only DACL without an extra dependency. Document the gap so a
     // Windows operator running `erebyx setup` sees the warning and can
-    // tighten permissions out-of-band. The file lands at %APPDATA% or
-    // %USERPROFILE% by default, which is already user-profile-scoped on a
-    // single-user box — the risk is multi-user Windows hosts and roaming
-    // profiles. A future v0.1.2 will wire `windows-acl` to close this.
+    // tighten permissions out-of-band. The file lands at %USERPROFILE%
+    // by default, which is already user-profile-scoped on a single-user
+    // box — the risk is multi-user Windows hosts and roaming profiles.
+    // A future v0.1.2 will wire `windows-acl` to close this.
+    //
+    // P1-B (brutal-review POSTFIX_CLI): warn once per process, not once
+    // per write_json call. `erebyx setup` typically writes one config
+    // per detected client (3-6 files on a developer box); a single
+    // warning per `setup` invocation is enough signal.
     #[cfg(windows)]
     {
-        eprintln!(
-            "  ⚠ {}: file permissions cannot be auto-restricted on Windows. \
-             Confirm %APPDATA% is not world-readable.",
-            path.display()
-        );
+        use std::sync::Once;
+        static WINDOWS_ACL_WARN: Once = Once::new();
+        WINDOWS_ACL_WARN.call_once(|| {
+            eprintln!(
+                "  ⚠ Windows: file permissions cannot be auto-restricted on this platform.\n\
+                 \n\
+                 Confirm %USERPROFILE% is not world-readable. To tighten ACLs on each\n\
+                 written config, run:\n\
+                 \n\
+                     icacls \"<path>\" /inheritance:r ^\n\
+                         /grant:r \"%USERNAME%:F\" \"SYSTEM:F\" \"Administrators:F\"\n\
+                 \n\
+                 See SECURITY.md → \"API-key file handling\" for the full guidance."
+            );
+        });
     }
 
     Ok(())

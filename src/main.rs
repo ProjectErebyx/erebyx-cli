@@ -279,7 +279,7 @@ async fn run(cli: Cli) -> Result<()> {
 /// client never sees a hung pipe. Fatal errors (no API key, unreachable host)
 /// exit non-zero so the parent harness can report a launch failure.
 async fn mcp_serve() -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     let client = ErebyxClient::new()?;
     let stdin = tokio::io::stdin();
@@ -303,23 +303,51 @@ async fn mcp_serve() -> Result<()> {
             continue;
         }
 
+        // P0-B (2026-05-27, brutal-review POSTFIX_CLI): when the line
+        // fails to parse as JSON, JSON-RPC 2.0 §5.1 mandates a local
+        // Parse error response with code -32700 — NOT a round-trip to
+        // the substrate. The prior code sent the garbage upstream as
+        // an HTTP body and emitted code -32603 on the 4xx reply, which
+        // both wasted network and used the wrong error code.
+        let parsed: Option<Value> = serde_json::from_str(trimmed).ok();
+        if parsed.is_none() {
+            let err = json!({
+                "jsonrpc": "2.0",
+                "id": Value::Null,
+                "error": {
+                    "code": -32700,
+                    "message": "Parse error",
+                },
+            });
+            if let Err(e) = emit_jsonrpc(&mut stdout, &err).await {
+                return Err(e);
+            }
+            continue;
+        }
+        let parsed_value = parsed.as_ref().unwrap();
+
         // P1-2 (2026-05-27): JSON-RPC 2.0 §4.1 — a Notification is a
         // Request without an `id`; the server MUST NOT respond. MCP uses
         // notifications for `notifications/cancelled` and
         // `notifications/initialized` etc. Claude Code's MCP client
         // treats spurious responses to notifications as protocol
         // violations and disconnects. Detect + fire-and-forget.
-        let parsed: Option<Value> = serde_json::from_str(trimmed).ok();
-        let is_notification = parsed
-            .as_ref()
-            .map(|v| v.get("id").is_none())
+        // (Note: explicit `id: null` IS a request per §4.2, so we check
+        // key presence via `as_object().contains_key`, not `.get().is_none`.)
+        let is_notification = !parsed_value
+            .as_object()
+            .map(|o| o.contains_key("id"))
             .unwrap_or(false);
         if is_notification {
             // Proxy upstream so the substrate sees the notification
             // (e.g. `notifications/initialized` finishes the MCP handshake)
             // but discard whatever the substrate sends back — spec says
-            // we MUST NOT echo a response.
-            let _ = client.proxy_jsonrpc(trimmed).await;
+            // we MUST NOT echo a response. Log proxy failures to stderr
+            // so operators can diagnose handshake hangs (stderr is
+            // invisible to the MCP stream over stdio).
+            if let Err(e) = client.proxy_jsonrpc(trimmed).await {
+                eprintln!("erebyx mcp-serve: notification proxy failed: {e}");
+            }
             continue;
         }
 
@@ -327,9 +355,9 @@ async fn mcp_serve() -> Result<()> {
             Ok(v) => v,
             Err(e) => json!({
                 "jsonrpc": "2.0",
-                "id": parsed
-                    .as_ref()
-                    .and_then(|v| v.get("id").cloned())
+                "id": parsed_value
+                    .get("id")
+                    .cloned()
                     .unwrap_or(Value::Null),
                 "error": {
                     "code": -32603,
@@ -338,13 +366,52 @@ async fn mcp_serve() -> Result<()> {
             }),
         };
 
-        let serialized = serde_json::to_string(&response)?;
-        stdout.write_all(serialized.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+        if let Err(e) = emit_jsonrpc(&mut stdout, &response).await {
+            return Err(e);
+        }
     }
 
     Ok(())
+}
+
+/// Serialize + emit a JSON-RPC value to stdout with newline + flush.
+///
+/// **P1-G (brutal-review POSTFIX_CLI, 2026-05-27):** stdout writes
+/// previously used `?`-propagation, which surfaced `BrokenPipe` as a
+/// non-zero exit. For a stdio bridge, BrokenPipe means the MCP client
+/// (Claude Code) has terminated — that's a clean shutdown signal, not
+/// an error. This helper maps BrokenPipe to a clean Ok(()) and bubbles
+/// the loop out via the caller's early-return so the bridge exits 0.
+async fn emit_jsonrpc(
+    stdout: &mut tokio::io::Stdout,
+    value: &Value,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let serialized = serde_json::to_string(value)?;
+
+    // Wrap each write so BrokenPipe → clean exit signal.
+    async fn write_or_broken(
+        out: &mut tokio::io::Stdout,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        match out.write_all(bytes).await {
+            Ok(_) => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(true),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    if write_or_broken(stdout, serialized.as_bytes()).await? {
+        return Ok(()); // caller should break; we signal via subsequent broken writes
+    }
+    if write_or_broken(stdout, b"\n").await? {
+        return Ok(());
+    }
+    match stdout.flush().await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Native hook-inject handler for Claude Code UserPromptSubmit hook.
