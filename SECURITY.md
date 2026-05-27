@@ -62,16 +62,29 @@ detected AI client's MCP config file (e.g. `~/.claude/settings.json`,
   typically user-profile-scoped on a single-user box, but **multi-user
   hosts and roaming profiles are not protected**. The CLI emits a
   one-line warning when it writes on Windows. Tighten the ACL
-  out-of-band (e.g. `icacls "%APPDATA%\Claude\settings.json"
-  /inheritance:r /grant:r "%USERNAME%:F"`) until v0.1.2 lands the
-  in-process fix.
+  out-of-band — Claude Code on Windows lands settings at
+  `%USERPROFILE%\.claude\settings.json`:
+
+  ```cmd
+  icacls "%USERPROFILE%\.claude\settings.json" /inheritance:r ^
+      /grant:r "%USERNAME%:F" "SYSTEM:F" "Administrators:F"
+  ```
+
+  Granting SYSTEM and Administrators alongside your user prevents
+  backup tools and AV scanners running as SYSTEM from losing read
+  access (the bare `%USERNAME%:F` grant strips both inherited
+  rights). v0.1.2 will land the in-process fix via `windows-acl`.
 - **Git working trees:** the CLI refuses to write a config file whose
   ancestor contains a `.git` directory unless you set
-  `EREBYX_ALLOW_GIT_TREE_CONFIG=1` explicitly. This prevents the
-  common footgun where users sync `~/.claude/` (or similar) to a
-  public dotfiles repo and unknowingly commit a credential. If your
-  workflow needs to write into a tracked path, set the env var AND
-  ensure the target is `.gitignore`'d.
+  `EREBYX_ALLOW_GIT_TREE_CONFIG=1` explicitly (truthy: `1`, `true`,
+  `yes` — `0` does NOT bypass). This prevents the common footgun where
+  users sync `~/.claude/` (or similar) to a public dotfiles repo and
+  unknowingly commit a credential. **`$HOME` as a git-managed
+  dotfiles repo (yadm, chezmoi --bare) is recognized and allowed by
+  default** — refuse it explicitly via `EREBYX_REFUSE_HOME_DOTFILES=1`
+  if your home repo IS the synced-public-repo case. Symlinked config
+  dirs into a dotfiles tree are caught by the canonical-path
+  resolution.
 - **Rotation:** if a config file is ever committed to a public repo
   or shared inadvertently, rotate your key immediately at
   [app.erebyx.com/keys](https://app.erebyx.com/keys). The substrate
