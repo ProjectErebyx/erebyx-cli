@@ -143,9 +143,110 @@ fn write_standard_mcp_config(client: &AiClient, api_key: &str, api_url: &str) ->
     Ok(client.config_path.clone())
 }
 
-/// Continue: ~/.continue/config.json
-/// Format: { "experimental": { "mcpServers": { "erebyx-os": { ... } } } }
+/// Continue: ~/.continue/config.yaml (current) or config.json (legacy).
+///
+/// YAML format (Continue ~2026-Q1+):
+///   mcpServers:
+///     erebyx-os:
+///       command: erebyx
+///       args: [mcp-serve]
+///       env:
+///         EREBYX_API_KEY: ...
+///
+/// JSON format (legacy, pre-YAML migration):
+///   { "experimental": { "mcpServers": { "erebyx-os": { ... } } } }
+///
+/// Format chosen by file extension on `client.config_path` (set in detect.rs).
 fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+    let is_yaml = client
+        .config_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
+        .unwrap_or(false);
+
+    if is_yaml {
+        write_continue_yaml(client, api_key, api_url)
+    } else {
+        write_continue_json_legacy(client, api_key, api_url)
+    }
+}
+
+/// Continue YAML — current format. Top-level `mcpServers`, no nesting.
+fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+    // Read existing YAML if any. Continue's YAML is straightforward; we
+    // do a string-level merge rather than depend on a yaml crate, to keep
+    // the CLI dep footprint small and avoid reformatting user content.
+    let existing = std::fs::read_to_string(&client.config_path).unwrap_or_default();
+    let cleaned = strip_existing_erebyx_yaml_block(&existing);
+
+    let entry = format!(
+        "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n      EREBYX_INSTANCE_ID: \"default\"\n",
+        cmd = erebyx_command(),
+        key = api_key,
+        url = api_url,
+    );
+
+    // If a top-level `mcpServers:` block exists, append our entry under
+    // it. Otherwise, add the block at the end.
+    let new_content = if cleaned.contains("\nmcpServers:") || cleaned.starts_with("mcpServers:") {
+        // Find the block and insert after its `mcpServers:` line.
+        let marker = if cleaned.starts_with("mcpServers:") {
+            0
+        } else {
+            cleaned.find("\nmcpServers:").unwrap() + 1
+        };
+        let line_end = cleaned[marker..].find('\n').map(|i| marker + i + 1).unwrap_or(cleaned.len());
+        let mut out = String::with_capacity(cleaned.len() + entry.len() + 64);
+        out.push_str(&cleaned[..line_end]);
+        out.push_str(&format!("  # EREBYX-START\n{}  # EREBYX-END\n", entry));
+        out.push_str(&cleaned[line_end..]);
+        out
+    } else {
+        let mut out = cleaned.trim_end().to_string();
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str("# EREBYX-START\nmcpServers:\n");
+        out.push_str(&entry);
+        out.push_str("# EREBYX-END\n");
+        out
+    };
+
+    if let Some(parent) = client.config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+    std::fs::write(&client.config_path, new_content)
+        .with_context(|| format!("Failed to write {}", client.config_path.display()))?;
+    Ok(client.config_path.clone())
+}
+
+/// Strip a previous `# EREBYX-START` / `# EREBYX-END`-marked block from the YAML,
+/// so re-running setup is idempotent and doesn't accumulate stale entries.
+fn strip_existing_erebyx_yaml_block(content: &str) -> String {
+    if let (Some(s), Some(e)) = (content.find("# EREBYX-START"), content.find("# EREBYX-END")) {
+        if s < e {
+            let end = e + "# EREBYX-END".len();
+            // Consume trailing newline + leading newline so we don't leave a gap.
+            let real_end = content[end..]
+                .find('\n')
+                .map(|i| end + i + 1)
+                .unwrap_or(end);
+            let mut out = String::with_capacity(content.len());
+            out.push_str(content[..s].trim_end());
+            if !out.is_empty() && !content[real_end..].is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&content[real_end..]);
+            return out;
+        }
+    }
+    content.to_string()
+}
+
+/// Continue JSON legacy — pre-YAML migration. Kept for users who haven't moved yet.
+fn write_continue_json_legacy(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
