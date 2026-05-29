@@ -21,7 +21,7 @@ use super::detect::AiClient;
 fn hook_script(api_url: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
-# Erebyx Memory Injector — Claude Code UserPromptSubmit Hook
+# EREBYX Memory Injector — Claude Code UserPromptSubmit Hook
 # Hands stdin to the native `erebyx hook-inject` handler.
 # Fail-open: any error path emits {{}}.
 

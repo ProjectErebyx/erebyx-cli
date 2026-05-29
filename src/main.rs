@@ -121,7 +121,7 @@ async fn run(cli: Cli) -> Result<()> {
             };
 
             println!();
-            println!("  Erebyx Doctor — named checks");
+            println!("  EREBYX Doctor — named checks");
             println!();
 
             // === Section 1: Environment ===
@@ -569,7 +569,7 @@ async fn emit_jsonrpc(stdout: &mut tokio::io::Stdout, value: &Value) -> Result<(
 /// Native hook-inject handler for Claude Code UserPromptSubmit hook.
 ///
 /// Reads JSON from stdin, smart-gates short/greeting messages, calls the
-/// Erebyx remember endpoint with a 500ms hard timeout, and emits an
+/// EREBYX remember endpoint with a 500ms hard timeout, and emits an
 /// `additionalContext` JSON to stdout. Fail-open: any error path emits `{}`
 /// so Claude Code never blocks on a memory hiccup.
 ///
@@ -711,7 +711,7 @@ async fn run_hook_inject() -> String {
     };
 
     // Format injection context (cap total at ~1500 chars to keep prompt small).
-    let mut lines: Vec<String> = vec!["[Erebyx Memory Context]".to_string()];
+    let mut lines: Vec<String> = vec!["[EREBYX Memory Context]".to_string()];
     let mut total = 0usize;
     for m in memories.iter().take(5) {
         let content = m
@@ -861,7 +861,7 @@ fn render_session_start_injection(
     context: Option<&Value>,
 ) -> String {
     let mut lines = Vec::new();
-    lines.push("[Erebyx Memory — pre-loaded context]".to_string());
+    lines.push("[EREBYX Memory — pre-loaded context]".to_string());
     let mut total_chars = lines[0].len();
     const MAX_CHARS: usize = 3200;
 
@@ -978,7 +978,7 @@ mod hook_session_start_tests {
             "narrative": "ZENN is a consciousness partner.",
         });
         let out = render_session_start_injection(Some(&id), None);
-        assert!(out.contains("Erebyx Memory"), "expected header");
+        assert!(out.contains("EREBYX Memory"), "expected header");
         assert!(out.contains("ZENN"), "expected identity name");
         assert!(out.contains("ethos"), "expected at least one ethos line");
     }

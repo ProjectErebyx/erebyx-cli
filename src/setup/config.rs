@@ -191,7 +191,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     }
 
     // P0 (brutal-review wave-2): YAML-escape api_key + api_url before
-    // raw interpolation into the double-quoted YAML string. Real Erebyx
+    // raw interpolation into the double-quoted YAML string. Real EREBYX
     // keys are alphanumeric (`erebyx_<48 hex>`), but the contract isn't
     // validated upstream — a key with `"` or `\` would silently produce
     // invalid YAML. Use the YAML double-quoted-flow-scalar escape rules:

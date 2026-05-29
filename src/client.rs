@@ -293,7 +293,7 @@ impl ErebyxClient {
             .json(&body)
             .send()
             .await
-            .context("Failed to connect to Erebyx")?;
+            .context("Failed to connect to EREBYX")?;
 
         let status = response.status();
         if let Some(len) = response.content_length() {
@@ -426,7 +426,7 @@ impl ErebyxClient {
             .body(raw_body.to_owned())
             .send()
             .await
-            .context("Failed to connect to Erebyx")?;
+            .context("Failed to connect to EREBYX")?;
 
         let status = response.status();
         if let Some(len) = response.content_length() {
@@ -482,7 +482,7 @@ impl ErebyxClient {
             .get(&url)
             .send()
             .await
-            .context("Failed to connect to Erebyx")?;
+            .context("Failed to connect to EREBYX")?;
 
         let status = response.status();
         if !status.is_success() {
@@ -506,7 +506,7 @@ impl ErebyxClient {
             .header("X-Erebyx-Session-Id", session_id())
             .send()
             .await
-            .context("Failed to connect to Erebyx")?;
+            .context("Failed to connect to EREBYX")?;
 
         let status = response.status();
         if let Some(len) = response.content_length() {

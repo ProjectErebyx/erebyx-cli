@@ -6,11 +6,11 @@ use clap::{Parser, Subcommand, ValueEnum};
     name = "erebyx",
     version,
     about = "Persistent AI memory across every AI you use.",
-    long_about = "Erebyx — persistent AI memory across every AI you use.
+    long_about = "EREBYX — persistent AI memory across every AI you use.
 
 Connects any MCP-capable AI client (Claude Code, Cursor, Windsurf, Continue,
 Zed, VS Code / Copilot, ChatGPT Custom GPTs, Hermes, raw HTTP harnesses) to
-your Erebyx memory substrate. The 5 cognitive verbs (restore_identity,
+your EREBYX memory substrate. The 5 cognitive verbs (restore_identity,
 load_context, save, remember, wrap_up) are the canonical surface.
 
 Quickstart:
@@ -139,7 +139,7 @@ pub enum Commands {
         diary: Option<String>,
     },
 
-    /// Run as an MCP stdio server — used by client integrations to connect to your Erebyx substrate.
+    /// Run as an MCP stdio server — used by client integrations to connect to your EREBYX substrate.
     ///
     /// Reads JSON-RPC requests on stdin, writes responses on stdout per the
     /// Model Context Protocol stdio transport. Wired automatically by `erebyx setup`
@@ -164,16 +164,16 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    /// Check Erebyx server health and client configurations
+    /// Check EREBYX server health and client configurations
     Doctor,
 
-    /// Check Erebyx server health
+    /// Check EREBYX server health
     Health,
 
     /// Internal: Claude Code memory-injection hook handler.
     ///
     /// Reads a UserPromptSubmit hook payload from stdin, performs a smart-gated
-    /// memory recall against the Erebyx API, and emits an additionalContext JSON
+    /// memory recall against the EREBYX API, and emits an additionalContext JSON
     /// to stdout. Fail-open on any error (emits `{}`).
     ///
     /// Not intended for direct user invocation. Wired automatically by `erebyx setup`.
