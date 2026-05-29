@@ -120,9 +120,11 @@ For every detected client, the setup writer drops an MCP server entry pointing a
 export EREBYX_API_KEY="<YOUR_API_KEY>"
 
 # Required for tenants registered at v0.1.1+ (Argon2id-default-on).
-# Find this in your dashboard recovery panel; treat it like a master
-# encryption key — losing it AND the BIP39 recovery seed is
-# unrecoverable by design (zero-knowledge property).
+# Find it in your dashboard recovery panel. At v0.1.1, EREBYX holds a
+# server-side master KEK and can decrypt for support/backup/recovery —
+# this is NOT zero-knowledge. When per-user zero-knowledge ships in v0.2,
+# your passphrase + BIP39 recovery seed become the ONLY keys to your
+# memory; losing both will be unrecoverable by design. Keep both safe.
 export EREBYX_PASSPHRASE="<YOUR_PASSPHRASE>"
 
 # Optional (defaults shown)
