@@ -12,14 +12,23 @@ use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
 use client::{session_id, ErebyxClient};
-use output::{print_error, print_response, print_response_with_hints};
+use output::{map_actionable_error, print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli).await {
-        print_error(&format!("{:#}", e));
+        // Brutal-review wave-2 (Genesis Arche T-5 days, 2026-05-27):
+        // promote ``erebyx doctor``'s actionable-error pattern to every
+        // command. Pre-fix the raw ``anyhow`` chain dumped here on any
+        // save/remember/wrap-up failure — first-touch developers hit a
+        // wall of ``Server error: 401 ...`` text and bounced. Now we
+        // route common failure classes (401 / 403 / 422 / 429 / 5xx /
+        // network / DNS) to single-line ``here's what's wrong, here's
+        // how to fix it`` messages and only fall through to the raw
+        // chain when no class matches.
+        print_error(&map_actionable_error(&format!("{:#}", e)));
         std::process::exit(1);
     }
 }
