@@ -212,7 +212,7 @@ pub async fn run_setup_dry_run(
     println!();
     println!(
         "  {}",
-        "Erebyx setup — DRY RUN (no files will be written)".bold().yellow()
+        "EREBYX setup — DRY RUN (no files will be written)".bold().yellow()
     );
     println!();
 
@@ -318,7 +318,7 @@ pub async fn run_setup_dry_run(
 
 pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Result<()> {
     println!();
-    println!("{}", "  Erebyx setup — universal AI memory".bold().cyan());
+    println!("{}", "  EREBYX setup — universal AI memory".bold().cyan());
     println!(
         "{}",
         "  Install persistent memory across all your AI tools.".dimmed()
@@ -366,7 +366,7 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
             } else {
                 // Mask input — API keys must never land in terminal scrollback or shell history.
                 Password::new()
-                    .with_prompt("  Enter your Erebyx API key")
+                    .with_prompt("  Enter your EREBYX API key")
                     .interact()?
             }
         }
@@ -515,7 +515,7 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     println!();
     if success_count > 0 {
         println!(
-            "  {} Configured {} client(s) with Erebyx memory.",
+            "  {} Configured {} client(s) with EREBYX memory.",
             "✓".green().bold(),
             success_count
         );
@@ -545,7 +545,7 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
 
     println!();
     println!("  {}", "What happens now:".bold());
-    println!("  • Your AI tools will have access to Erebyx memory tools");
+    println!("  • Your AI tools will have access to EREBYX memory tools");
     println!("  • Rules files guide your AI to use memory proactively");
     println!("  • Memory persists across every configured client");
 
@@ -575,7 +575,7 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     println!();
     println!(
         "       {}",
-        "\"Save that I'm setting up Erebyx, category: identity\"".cyan()
+        "\"Save that I'm setting up EREBYX, category: identity\"".cyan()
     );
     println!();
     println!("  3. Then ask:");

@@ -18,7 +18,7 @@ use super::detect::{AiClient, ClientKind};
 /// defense (anthropics/claude-code#17804) that surfaces imperative system-
 /// command text TO THE USER as visible text instead of treating it as
 /// system context. "Call X" / "you must Y" / "always Z" trigger the
-/// defense. Declarative statements ("this project uses Erebyx; the
+/// defense. Declarative statements ("this project uses EREBYX; the
 /// substrate exposes 5 tools") do not.
 ///
 /// claude-mem (46.1K stars) — the canonical Claude-Code memory product —
@@ -30,9 +30,9 @@ use super::detect::{AiClient, ClientKind};
 /// 2026-05-27 declarative rewrite — declarative form actually compresses
 /// better than imperative because it drops the "you must"/"do not ask"
 /// padding around each instruction.
-const RULES_CONTENT: &str = r#"# Erebyx Memory — substrate reference
+const RULES_CONTENT: &str = r#"# EREBYX Memory — substrate reference
 
-This project uses Erebyx for persistent AI memory across sessions. The substrate exposes 5 cognitive tools via MCP. Tool selection is automatic; this section describes when each tool applies so the AI can decide.
+This project uses EREBYX for persistent AI memory across sessions. The substrate exposes 5 cognitive tools via MCP. Tool selection is automatic; this section describes when each tool applies so the AI can decide.
 
 **Session-start tools (called once at the beginning of a session):**
 - `restore_identity` — returns the stored identity, ethos, and foundation memories that should anchor this session's responses.
