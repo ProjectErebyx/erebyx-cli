@@ -1,0 +1,61 @@
+# Self-hosted CI for erebyx-cli (public OSS carve-out).
+#
+# Runs on EREBYX self-hosted runners — no GitHub Actions billing
+# (bootstrapped-forever / self-hosted-only posture). Proves the `erebyx`
+# binary builds, tests pass, and lints clean on Linux x64. macOS/Windows
+# are supported via `cargo install erebyx` from source (Rust builds
+# cross-platform from source); CI gates the Linux build + the
+# platform-agnostic test/lint suite.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-test-lint:
+    name: build + test + lint (self-hosted linux)
+    runs-on: [self-hosted, linux, x64, erebyx]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: rustfmt --check
+        run: cargo fmt --all -- --check
+
+      - name: clippy (-D warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: build (release)
+        run: cargo build --release --locked --verbose
+
+      - name: test
+        run: cargo test --locked --verbose
+
+      - name: --help smoke
+        # Catches link errors that `cargo build` misses — confirm the
+        # binary starts and emits usage.
+        run: cargo run --release --locked -- --help
