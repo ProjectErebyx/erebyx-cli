@@ -42,8 +42,7 @@ fn erebyx_server_entry(api_key: &str, api_url: &str) -> Value {
         "args": ["mcp-serve"],
         "env": {
             "EREBYX_API_KEY": api_key,
-            "EREBYX_API_URL": api_url,
-            "EREBYX_INSTANCE_ID": "default"
+            "EREBYX_API_URL": api_url
         }
     })
 }
@@ -206,7 +205,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     let cleaned = strip_existing_erebyx_yaml_block(&existing);
 
     let entry = format!(
-        "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n      EREBYX_INSTANCE_ID: \"default\"\n",
+        "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n",
         cmd = erebyx_command(),
         key = api_key_escaped,
         url = api_url_escaped,
@@ -367,8 +366,7 @@ fn write_zed_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<P
                     "args": ["mcp-serve"],
                     "env": {
                         "EREBYX_API_KEY": api_key,
-                        "EREBYX_API_URL": api_url,
-                        "EREBYX_INSTANCE_ID": "default"
+                        "EREBYX_API_URL": api_url
                     }
                 }
             }),
@@ -406,8 +404,7 @@ fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Resul
             "args": ["mcp-serve"],
             "env": {
                 "EREBYX_API_KEY": api_key,
-                "EREBYX_API_URL": api_url,
-                "EREBYX_INSTANCE_ID": "default"
+                "EREBYX_API_URL": api_url
             }
         }),
     );
