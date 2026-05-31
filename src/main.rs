@@ -11,7 +11,7 @@ use std::env;
 use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
-use client::{session_id, ErebyxClient};
+use client::{is_safe_url, session_id, ErebyxClient};
 use output::{map_actionable_error, print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
@@ -660,6 +660,15 @@ async fn run_hook_inject() -> String {
     let api_url =
         std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
 
+    // P1-5: this handler POSTs the bearer token directly (bypassing
+    // `ErebyxClient::new`'s URL guard). Enforce the same HTTPS-or-localhost
+    // contract here. Fail OPEN to empty JSON — matching this hook's
+    // never-block contract — so a bad EREBYX_API_URL silences injection
+    // instead of leaking the bearer to an arbitrary host.
+    if !is_safe_url(&api_url) {
+        return empty;
+    }
+
     // Build a quick HTTP client with 500ms hard timeout.
     let http = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(500))
@@ -788,6 +797,14 @@ async fn run_hook_session_start() -> String {
     };
     let api_url =
         std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+
+    // P1-5: same as hook-inject — this SessionStart handler POSTs the bearer
+    // token directly, bypassing `ErebyxClient::new`'s URL guard. Enforce
+    // HTTPS-or-localhost, failing OPEN to empty JSON so session boot is never
+    // blocked and the bearer is never sent to an unsafe host.
+    if !is_safe_url(&api_url) {
+        return empty;
+    }
 
     // 800ms total budget. Each substrate call gets up to 400ms.
     let http = match reqwest::Client::builder()
@@ -1031,6 +1048,84 @@ mod hook_session_start_tests {
                 "render output contains imperative phrase '{}': {}",
                 banned, out
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod hook_handler_url_guard_tests {
+    use super::run_hook_session_start;
+
+    /// RAII env setter that restores the prior value on drop. Both handlers
+    /// read process-global env; this test mutates `EREBYX_API_URL` /
+    /// `EREBYX_API_KEY` and restores them so it doesn't bleed into siblings.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, val: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, val);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// REGRESSION (P1-5): the Claude Code hook handlers POST the bearer
+    /// token directly, bypassing `ErebyxClient::new`'s URL guard. Both
+    /// assertions live in ONE test to avoid a cross-test race on the shared
+    /// `EREBYX_API_URL` / `EREBYX_API_KEY` process env (and to avoid holding
+    /// a lock across `.await`, which clippy's `await_holding_lock` forbids).
+    ///
+    /// In `cargo test` stdin is empty (EOF) — `run_hook_session_start`
+    /// drains it fine; the env-driven URL guard is what we exercise.
+    ///
+    /// Why it FAILS pre-fix: the original `run_hook_session_start` had NO
+    /// `is_safe_url` gate. With `EREBYX_API_URL=http://198.51.100.7:1`
+    /// (RFC-5737 TEST-NET, guaranteed unroutable) it would build the client
+    /// and `POST .../v0/identity/restore` + `/v0/session/load` with
+    /// `.bearer_auth(api_key)` — attempting to leak the bearer — and only
+    /// return `{}` AFTER both connect attempts timed out (~2x400ms budget).
+    /// Post-fix it returns `{}` instantly without constructing any request,
+    /// which the elapsed-time ceiling proves.
+    #[tokio::test]
+    async fn hook_handlers_fail_open_on_unsafe_url_and_proceed_on_safe() {
+        let _key = EnvGuard::set("EREBYX_API_KEY", "ebx_live_test_key_not_real");
+
+        // --- Unsafe (plain-http, non-localhost) URL: short-circuit to {} ---
+        {
+            // TEST-NET address (RFC 5737) so even a regression can't reach a
+            // real host. is_safe_url rejects it (http:// + non-localhost).
+            let _url = EnvGuard::set("EREBYX_API_URL", "http://198.51.100.7:1");
+            let start = std::time::Instant::now();
+            let out = run_hook_session_start().await;
+            let elapsed = start.elapsed();
+            assert_eq!(out, "{}", "must fail open to empty JSON on unsafe URL");
+            // Post-fix returns before the 2x400ms substrate budget; a 300ms
+            // ceiling proves we short-circuited at the URL guard rather than
+            // attempting (and timing out) two bearer-bearing POSTs.
+            assert!(
+                elapsed < std::time::Duration::from_millis(300),
+                "URL guard must short-circuit before any HTTP attempt; took {elapsed:?}"
+            );
+        }
+
+        // --- Safe URL (localhost:1, no listener): proceeds, still {} ---
+        {
+            // localhost:1 passes is_safe_url but has no listener → connect
+            // refused → fail-open {} AFTER attempting the calls. Confirms the
+            // guard rejects ONLY unsafe URLs, never the happy path.
+            let _url = EnvGuard::set("EREBYX_API_URL", "http://127.0.0.1:1");
+            let out = run_hook_session_start().await;
+            assert_eq!(out, "{}", "unreachable safe URL still fails open to {{}}");
         }
     }
 }

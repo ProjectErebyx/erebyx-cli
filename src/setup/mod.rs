@@ -18,6 +18,25 @@ use std::path::PathBuf;
 
 use detect::{detect_clients, AiClient};
 
+use crate::client::is_safe_url;
+
+/// Shared error message for an unsafe `EREBYX_API_URL` — matches the
+/// `ErebyxClient::new` guard wording so the operator sees one consistent
+/// contract no matter which entry point rejects (P1-4).
+const UNSAFE_URL_MSG: &str = "EREBYX_API_URL must be https:// (got {URL}). \
+     Plain http:// is only allowed for localhost/127.0.0.1.";
+
+/// Validate an `api_url` with the canonical `is_safe_url` guard, returning a
+/// uniform `anyhow` error on rejection. Centralizes the HTTPS-or-localhost
+/// enforcement across `run_setup` / `run_setup_dry_run` so the bearer token
+/// is never POSTed over plain http:// to an arbitrary host.
+fn ensure_safe_api_url(api_url: &str) -> Result<()> {
+    if !is_safe_url(api_url) {
+        anyhow::bail!(UNSAFE_URL_MSG.replace("{URL}", api_url));
+    }
+    Ok(())
+}
+
 /// Fetch the substrate's `restore_identity` + `load_context` summary
 /// payloads and render a compact pre-injection text suitable for the
 /// dynamic block of every detected client's rules file.
@@ -29,6 +48,14 @@ use detect::{detect_clients, AiClient};
 /// **Fail-open everywhere**: returns an empty string on any error.
 /// Setup never refuses to complete because a single API call failed.
 async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
+    // P1-4: never POST the bearer token over an unsafe URL. `fetch_dynamic_context`
+    // is fail-open by contract (returns "" on any error), so a bad URL yields an
+    // empty dynamic block rather than leaking credentials to an arbitrary host.
+    // In normal flow `run_setup` already rejected an unsafe URL before reaching
+    // here; this is the in-function fence the finding calls for.
+    if !is_safe_url(api_url) {
+        return String::new();
+    }
     let http = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1500))
         .build()
@@ -207,6 +234,13 @@ pub async fn run_setup_dry_run(
     api_url: Option<String>,
 ) -> Result<()> {
     let api_url = api_url.unwrap_or_else(|| "https://core.erebyx.com".to_string());
+
+    // P1-4: reject an unsafe URL up-front. Dry-run makes no HTTP calls, but it
+    // PREVIEWS the hook script + config that the real run would write with this
+    // URL — so it must enforce the same HTTPS-or-localhost contract or it would
+    // greenlight a setup the real run rejects.
+    ensure_safe_api_url(&api_url)?;
+
     let placeholder_key = "<YOUR_EREBYX_API_KEY>";
 
     println!();
@@ -375,6 +409,11 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     let api_url = api_url
         .or_else(|| std::env::var("EREBYX_API_URL").ok())
         .unwrap_or_else(|| "https://core.erebyx.com".to_string());
+
+    // P1-4: enforce HTTPS-or-localhost on the resolved URL BEFORE writing any
+    // config, rules, or hook script with it — and before `fetch_dynamic_context`
+    // would POST the bearer token. One guard, all downstream consumers covered.
+    ensure_safe_api_url(&api_url)?;
 
     // Step 3: Choose which clients to configure
     let unconfigured: Vec<&AiClient> = clients.iter().filter(|c| !c.config_exists).collect();
@@ -682,5 +721,76 @@ mod dynamic_block_tests {
             "expected bounded output ≤3400 chars, got {} chars",
             out.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod api_url_guard_tests {
+    use super::ensure_safe_api_url;
+
+    /// REGRESSION (P1-4): setup must enforce HTTPS-or-localhost on
+    /// `api_url`. Against the original `mod.rs` there was NO such guard —
+    /// these unsafe URLs flowed straight into `fetch_dynamic_context`
+    /// (POSTing the bearer token) and into the hook/config writers.
+    #[test]
+    fn ensure_safe_api_url_rejects_plain_http_to_internet() {
+        let err = ensure_safe_api_url("http://evil.example.com").unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("https://"), "error must explain HTTPS requirement: {msg}");
+        assert!(msg.contains("evil.example.com"), "error must echo the offending URL: {msg}");
+    }
+
+    #[test]
+    fn ensure_safe_api_url_rejects_wrong_scheme() {
+        for bad in &[
+            "ftp://evil.example.com",
+            "file:///etc/passwd",
+            "http://evil.example.com",
+            "ws://evil.example.com",
+        ] {
+            assert!(
+                ensure_safe_api_url(bad).is_err(),
+                "setup must reject wrong-scheme api_url {bad:?}"
+            );
+        }
+    }
+
+    /// `ensure_safe_api_url` is the scheme guard, so a `https://`-prefixed
+    /// injection payload PASSES it — documenting why hooks.rs additionally
+    /// single-quotes the value (defense-in-depth). The setup HTTP paths
+    /// (`fetch_dynamic_context`) only ever use the URL as a reqwest base,
+    /// never as shell, so scheme-validation is the correct guard there; the
+    /// shell-breakout surface lives solely in the generated hook script.
+    #[test]
+    fn ensure_safe_api_url_scheme_only_documents_defense_in_depth() {
+        assert!(
+            ensure_safe_api_url(r#"https://evil}$(touch /tmp/pwn)"#).is_ok(),
+            "scheme guard accepts https:// payloads by design; hook script \
+             single-quoting is the breakout defense"
+        );
+    }
+
+    #[test]
+    fn ensure_safe_api_url_accepts_https_and_localhost() {
+        for ok in &[
+            "https://core.erebyx.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:9000/mcp",
+        ] {
+            assert!(ensure_safe_api_url(ok).is_ok(), "valid api_url {ok:?} must pass");
+        }
+    }
+
+    /// `run_setup_dry_run` validates the URL before touching anything.
+    /// Pre-fix it would print a preview for an unsafe URL the real run
+    /// rejects. Async-but-no-I/O, so it runs without a substrate.
+    #[tokio::test]
+    async fn run_setup_dry_run_rejects_unsafe_url() {
+        let res = super::run_setup_dry_run(
+            None,
+            Some("http://evil.example.com".to_string()),
+        )
+        .await;
+        assert!(res.is_err(), "dry-run must reject a plain-http internet URL");
     }
 }
