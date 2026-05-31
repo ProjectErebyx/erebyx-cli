@@ -99,7 +99,16 @@ fn generate_session_id() -> String {
 ///
 /// Scheme matching is case-insensitive so `HTTPS://...` from a clipboard
 /// paste doesn't get rejected on a technicality (audit P2-4 adjacent).
-fn is_safe_url(url: &str) -> bool {
+///
+/// Exposed `pub(crate)` so the single canonical URL guard is shared across
+/// every `EREBYX_API_URL` consumer — `ErebyxClient::new`, `erebyx setup`,
+/// and both Claude Code hook handlers (`hook-inject` / `hook-session-start`)
+/// — instead of each path re-deriving (or skipping) the check. Centralizing
+/// here closes the launch-grade gap where `setup` + the hook handlers POSTed
+/// the bearer token to whatever `EREBYX_API_URL` pointed at, bypassing this
+/// guard, and where an attacker-controlled `api_url` was shell-interpolated
+/// into the generated hook script.
+pub(crate) fn is_safe_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("https://") {
         return true;

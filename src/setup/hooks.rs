@@ -12,13 +12,50 @@
 use anyhow::{bail, Context, Result};
 
 use super::detect::AiClient;
+use crate::client::is_safe_url;
+
+/// Wrap a string as a POSIX single-quoted shell literal that can NEVER break
+/// out of its quoting — closing every embedded `'` with the canonical
+/// `'\''` sequence. Inside single quotes the shell treats `$`, backtick,
+/// `}`, `"` and every other metacharacter literally, so command
+/// substitution / parameter-expansion breakout is structurally impossible.
+///
+/// This is the second half of the hooks.rs hardening (the first being
+/// `is_safe_url` validation up the call chain): even if a malformed
+/// `api_url` ever reached here, it lands as inert data, not shell.
+fn shell_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            // Close quote, emit an escaped quote, reopen quote.
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
 
 /// The hook script that runs on every user message in Claude Code.
 ///
 /// Trivial wrapper: hands stdin off to `erebyx hook-inject`. All logic
 /// (gating, query, REST call, formatting) lives in the native binary.
 /// The API key is read from $EREBYX_API_KEY by the binary itself.
+///
+/// Security (P0-2): `api_url` is validated by `is_safe_url` (HTTPS or
+/// localhost) BEFORE this script is generated — see `install_hooks`. As
+/// defense-in-depth, the validated value is emitted as a POSIX
+/// single-quoted shell literal via `shell_single_quote`, so even a value
+/// containing `$(...)`, backticks, `}` or `"` cannot escape its quoting
+/// and execute. The prior `${{EREBYX_API_URL:-{api_url}}}` default-expansion
+/// interpolated `api_url` unquoted into the default word, where a value like
+/// `}$(...)` would close the parameter expansion and run a command
+/// substitution at hook-fire time.
 fn hook_script(api_url: &str) -> String {
+    // Single-quoted literal — already includes the surrounding quotes.
+    let quoted_default = shell_single_quote(api_url);
     format!(
         r#"#!/usr/bin/env bash
 # EREBYX Memory Injector — Claude Code UserPromptSubmit Hook
@@ -34,17 +71,38 @@ if [ -z "${{EREBYX_API_KEY:-}}" ]; then
 fi
 
 # Pass api_url through env so hook-inject doesn't need flag parsing.
-export EREBYX_API_URL="${{EREBYX_API_URL:-{api_url}}}"
+# Honor an inherited EREBYX_API_URL; otherwise fall back to the validated
+# install-time value, emitted as a single-quoted shell literal so it can
+# never break out into command substitution.
+export EREBYX_API_URL="${{EREBYX_API_URL:-}}"
+if [ -z "${{EREBYX_API_URL}}" ]; then
+    export EREBYX_API_URL={quoted_default}
+fi
 
 # Single native call. If it fails for any reason, emit {{}} and exit clean.
 exec erebyx hook-inject 2>/dev/null || printf '%s' '{{}}'
 "#,
-        api_url = api_url,
+        quoted_default = quoted_default,
     )
 }
 
 /// Install Claude Code hooks for automatic memory injection.
 pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result<()> {
+    // P0-2 / P1-4: refuse to bake an unsafe URL into the generated hook
+    // script. `is_safe_url` accepts HTTPS or localhost only — anything else
+    // (plain http:// to the internet, or an injection payload containing
+    // `$(...)` / backticks / `}` / `"`) is rejected here, before the script
+    // is written. `hook_script` also single-quotes the value as
+    // defense-in-depth, but failing loud at install time is the correct
+    // contract: setup is interactive, so a bad URL must surface, not
+    // silently land a neutered script.
+    if !is_safe_url(api_url) {
+        bail!(
+            "EREBYX_API_URL must be https:// (got {}). \
+             Plain http:// is only allowed for localhost/127.0.0.1.",
+            api_url
+        );
+    }
     // P1-4 (2026-05-27): the hook script uses bash + Unix path conventions.
     // Claude Code on Windows doesn't invoke `.sh` files directly (it wants
     // `.bat` / `.cmd` / `.ps1`). Pre-fix `erebyx setup` reported success on
@@ -394,5 +452,130 @@ mod tests {
     fn entry_with_null_command_doesnt_panic() {
         let entry = json!({"type": "command", "command": null});
         assert!(!should_remove_hook_entry(&entry));
+    }
+
+    // -------------------------------------------------------------
+    // P0-2: shell-injection hardening of the generated hook script
+    // -------------------------------------------------------------
+
+    /// `shell_single_quote` produces an inert single-quoted literal:
+    /// command-substitution, backticks, `}`, and `"` survive verbatim and
+    /// cannot break out of the quoting.
+    #[test]
+    fn shell_single_quote_neutralizes_metacharacters() {
+        // No embedded single-quote → simple wrap.
+        assert_eq!(shell_single_quote("https://core.erebyx.com"), "'https://core.erebyx.com'");
+        // Embedded single-quote → '\'' splice, no other char is special.
+        assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
+        // Metacharacters that the OLD `${VAR:-...}` interpolation let escape
+        // are now inert data inside single quotes.
+        let payload = r#"}$(touch /tmp/pwn)`id`"#;
+        let quoted = shell_single_quote(payload);
+        assert!(quoted.starts_with('\''));
+        assert!(quoted.ends_with('\''));
+        // The whole payload is preserved as ONE single-quoted run (no
+        // `'\''` splice because the payload contains no single quote), so
+        // nothing inside it is shell-active.
+        assert_eq!(quoted, format!("'{payload}'"));
+    }
+
+    /// REGRESSION (P0-2): the generated hook script must NOT contain a
+    /// command-substitution / backtick / `}`-breakout sequence OUTSIDE of a
+    /// single-quoted literal. Against the ORIGINAL `hooks.rs` this FAILS:
+    /// the url was interpolated into `${EREBYX_API_URL:-<payload>}` where a
+    /// payload of `}$(...)` closed the parameter expansion and produced a
+    /// live `$(...)` at hook-fire time.
+    ///
+    /// Note: `install_hooks` now also REJECTS such a url via `is_safe_url`,
+    /// but we test `hook_script` directly to pin the defense-in-depth
+    /// quoting contract independent of the validation gate.
+    #[test]
+    fn hook_script_neutralizes_command_substitution_payload() {
+        let payload = r#"http://evil}$(touch /tmp/erebyx_pwn)"#;
+        let script = hook_script(payload);
+        // The dangerous payload must appear ONLY inside its single-quoted
+        // literal. Concretely: the `$(` must be immediately preceded by
+        // characters that keep it inside the single-quote run — i.e. there
+        // must be NO `${EREBYX_API_URL:-...$(` default-expansion form.
+        assert!(
+            !script.contains("${EREBYX_API_URL:-http://evil}"),
+            "url was interpolated into an unquoted parameter-expansion default \
+             — `}}` breaks out and `$(...)` executes. Script:\n{script}"
+        );
+        // The literal payload, single-quoted, is what should be present.
+        assert!(
+            script.contains(&format!("export EREBYX_API_URL={}", shell_single_quote(payload))),
+            "expected the api_url emitted as a single-quoted shell literal. Script:\n{script}"
+        );
+    }
+
+    /// REGRESSION (P0-2): a payload containing a literal backtick and `}`
+    /// is fully contained in the single-quoted literal — no backtick
+    /// command substitution is left active in the script.
+    #[test]
+    fn hook_script_neutralizes_backtick_payload() {
+        let payload = "https://x`id`y";
+        let script = hook_script(payload);
+        // The only occurrence of the backtick payload is inside the
+        // single-quoted export line.
+        let expected_line = format!("export EREBYX_API_URL={}", shell_single_quote(payload));
+        assert!(script.contains(&expected_line), "Script:\n{script}");
+        // And the OLD vulnerable form is gone.
+        assert!(
+            !script.contains("${EREBYX_API_URL:-https://x`id`y}"),
+            "backtick payload interpolated into bare default expansion. Script:\n{script}"
+        );
+    }
+
+    /// REGRESSION (P1-4): `install_hooks`' `is_safe_url` gate rejects
+    /// wrong-SCHEME URLs (plain http:// to the internet, ftp://, etc.)
+    /// BEFORE writing any script. Against the original code there was NO
+    /// gate in `install_hooks`, so a plain-http URL would be baked into the
+    /// hook script and the bearer later POSTed over it.
+    #[test]
+    fn install_hooks_guard_rejects_wrong_scheme() {
+        for bad in &[
+            "http://evil.example.com", // plain http to internet
+            "ftp://evil.example.com",  // wrong scheme entirely
+            "file:///etc/passwd",      // not http(s)
+        ] {
+            assert!(
+                !is_safe_url(bad),
+                "install_hooks guard must reject wrong-scheme api_url {bad:?}"
+            );
+        }
+        for ok in &["https://core.erebyx.com", "http://localhost:8080", "http://127.0.0.1:9000"] {
+            assert!(is_safe_url(ok), "valid api_url {ok:?} must pass");
+        }
+    }
+
+    /// REGRESSION (P0-2) — the load-bearing one: `is_safe_url` is a SCHEME
+    /// guard, NOT a shell-metacharacter guard, so a `https://`-prefixed
+    /// injection payload PASSES validation. This documents WHY validation
+    /// alone is insufficient and the single-quoting in `hook_script` is the
+    /// actual breakout defense. The generated script must neutralize the
+    /// payload even though `is_safe_url` accepts it.
+    #[test]
+    fn https_prefixed_injection_passes_scheme_guard_but_script_neutralizes_it() {
+        let payload = r#"https://evil}$(touch /tmp/erebyx_pwn)`id`"#;
+        // Validation alone does NOT catch this (scheme is https://):
+        assert!(
+            is_safe_url(payload),
+            "is_safe_url is scheme-only; this https:// payload is expected to pass \
+             — which is exactly why defense-in-depth single-quoting is required"
+        );
+        // But the generated script renders it inert (single-quoted literal),
+        // NOT as a live `${EREBYX_API_URL:-...}` default-expansion. Against
+        // the ORIGINAL hooks.rs this assertion FAILS — the payload landed in
+        // `${EREBYX_API_URL:-https://evil}$(...)` and `}` + `$(...)` executed.
+        let script = hook_script(payload);
+        assert!(
+            script.contains(&format!("export EREBYX_API_URL={}", shell_single_quote(payload))),
+            "payload must be emitted as a single-quoted shell literal. Script:\n{script}"
+        );
+        assert!(
+            !script.contains("${EREBYX_API_URL:-https://evil}"),
+            "payload must NOT appear in an unquoted parameter-expansion default. Script:\n{script}"
+        );
     }
 }
