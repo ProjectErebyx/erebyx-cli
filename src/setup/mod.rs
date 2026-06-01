@@ -165,7 +165,10 @@ fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> St
     if let Some(ctx) = context {
         let handoff = ctx.get("handoff").or_else(|| ctx.get("continuity"));
         if let Some(h) = handoff {
-            let what = h.get("what_we_built").and_then(|v| v.as_str()).unwrap_or("");
+            let what = h
+                .get("what_we_built")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let next = h.get("whats_next").and_then(|v| v.as_str()).unwrap_or("");
             if !what.is_empty() || !next.is_empty() {
                 lines.push("\nLast session handoff:".to_string());
@@ -193,7 +196,12 @@ fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> St
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
             .unwrap_or_default();
         if !anchors.is_empty() {
-            let joined = anchors.iter().take(5).copied().collect::<Vec<_>>().join(", ");
+            let joined = anchors
+                .iter()
+                .take(5)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
             let line = format!("Recent anchors: {}", joined);
             if chars + line.len() < MAX_CHARS {
                 lines.push(line);
@@ -229,10 +237,7 @@ fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> St
 /// fetch + auth probe so it can run offline against any env. The
 /// `EREBYX_API_KEY` prompt is also skipped — paths are shown using
 /// a placeholder. Run the real setup for credentials + dynamic context.
-pub async fn run_setup_dry_run(
-    _api_key: Option<String>,
-    api_url: Option<String>,
-) -> Result<()> {
+pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>) -> Result<()> {
     let api_url = api_url.unwrap_or_else(|| "https://core.erebyx.com".to_string());
 
     // P1-4: reject an unsafe URL up-front. Dry-run makes no HTTP calls, but it
@@ -246,7 +251,9 @@ pub async fn run_setup_dry_run(
     println!();
     println!(
         "  {}",
-        "EREBYX setup — DRY RUN (no files will be written)".bold().yellow()
+        "EREBYX setup — DRY RUN (no files will be written)"
+            .bold()
+            .yellow()
     );
     println!();
 
@@ -264,7 +271,9 @@ pub async fn run_setup_dry_run(
     println!("  {} Detected {} client(s):", "✓".green(), clients.len());
     for client in &clients {
         let status = if client.config_exists {
-            " (already has erebyx config — would be re-merged)".dimmed().to_string()
+            " (already has erebyx config — would be re-merged)"
+                .dimmed()
+                .to_string()
         } else {
             String::new()
         };
@@ -292,7 +301,11 @@ pub async fn run_setup_dry_run(
             println!(
                 "    • {} hook   — {}",
                 client.name.dimmed(),
-                client.home_dir.join("hooks").join("erebyx-memory-injector.sh").display()
+                client
+                    .home_dir
+                    .join("hooks")
+                    .join("erebyx-memory-injector.sh")
+                    .display()
             );
         }
     }
@@ -303,16 +316,13 @@ pub async fn run_setup_dry_run(
         .iter()
         .any(|c| c.kind == detect::ClientKind::ClaudeCode);
     if has_claude_code {
-        println!("  {}", "Hooks that would be installed (Claude Code):".bold());
         println!(
-            "    • UserPromptSubmit — runs `erebyx hook-inject` on every prompt"
+            "  {}",
+            "Hooks that would be installed (Claude Code):".bold()
         );
-        println!(
-            "    • SessionStart     — runs `erebyx hook-session-start` once per session"
-        );
-        println!(
-            "    • Both are marked `_erebyx_managed: true` so re-running setup replaces"
-        );
+        println!("    • UserPromptSubmit — runs `erebyx hook-inject` on every prompt");
+        println!("    • SessionStart     — runs `erebyx hook-session-start` once per session");
+        println!("    • Both are marked `_erebyx_managed: true` so re-running setup replaces");
         println!("      them precisely; user-authored hooks alongside are preserved.");
         println!();
     }
@@ -321,12 +331,8 @@ pub async fn run_setup_dry_run(
     let any_existing = clients.iter().any(|c| c.config_exists);
     if any_existing {
         println!("  {}", "Idempotency:".bold());
-        println!(
-            "    Existing erebyx-managed entries would be replaced cleanly. Other"
-        );
-        println!(
-            "    MCP servers and hooks in the same config files would be untouched."
-        );
+        println!("    Existing erebyx-managed entries would be replaced cleanly. Other");
+        println!("    MCP servers and hooks in the same config files would be untouched.");
         println!();
     }
 
@@ -343,7 +349,10 @@ pub async fn run_setup_dry_run(
     println!("    Skipped in this dry run.");
     println!();
 
-    println!("  {} placeholder used wherever an API key would appear.", placeholder_key.dimmed());
+    println!(
+        "  {} placeholder used wherever an API key would appear.",
+        placeholder_key.dimmed()
+    );
     println!();
     println!("  Re-run without `--dry-run` to perform setup.");
     println!();
@@ -495,7 +504,10 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
                                 Ok(_) => {
                                     paths_touched.push((
                                         "Claude Code hook script".to_string(),
-                                        client.home_dir.join("hooks").join("erebyx-memory-injector.sh"),
+                                        client
+                                            .home_dir
+                                            .join("hooks")
+                                            .join("erebyx-memory-injector.sh"),
                                     ));
                                 }
                                 Err(e) => {
@@ -699,7 +711,11 @@ mod dynamic_block_tests {
     #[test]
     fn render_dynamic_block_empty_when_no_inputs() {
         let out = render_dynamic_block(None, None);
-        assert!(out.is_empty(), "expected empty output for nil inputs, got: {}", out);
+        assert!(
+            out.is_empty(),
+            "expected empty output for nil inputs, got: {}",
+            out
+        );
     }
 
     /// Verify the renderer respects the MAX_CHARS cap. Without this,
@@ -736,8 +752,14 @@ mod api_url_guard_tests {
     fn ensure_safe_api_url_rejects_plain_http_to_internet() {
         let err = ensure_safe_api_url("http://evil.example.com").unwrap_err();
         let msg = format!("{err:?}");
-        assert!(msg.contains("https://"), "error must explain HTTPS requirement: {msg}");
-        assert!(msg.contains("evil.example.com"), "error must echo the offending URL: {msg}");
+        assert!(
+            msg.contains("https://"),
+            "error must explain HTTPS requirement: {msg}"
+        );
+        assert!(
+            msg.contains("evil.example.com"),
+            "error must echo the offending URL: {msg}"
+        );
     }
 
     #[test]
@@ -777,7 +799,10 @@ mod api_url_guard_tests {
             "http://localhost:8080",
             "http://127.0.0.1:9000/mcp",
         ] {
-            assert!(ensure_safe_api_url(ok).is_ok(), "valid api_url {ok:?} must pass");
+            assert!(
+                ensure_safe_api_url(ok).is_ok(),
+                "valid api_url {ok:?} must pass"
+            );
         }
     }
 
@@ -786,11 +811,10 @@ mod api_url_guard_tests {
     /// rejects. Async-but-no-I/O, so it runs without a substrate.
     #[tokio::test]
     async fn run_setup_dry_run_rejects_unsafe_url() {
-        let res = super::run_setup_dry_run(
-            None,
-            Some("http://evil.example.com".to_string()),
-        )
-        .await;
-        assert!(res.is_err(), "dry-run must reject a plain-http internet URL");
+        let res = super::run_setup_dry_run(None, Some("http://evil.example.com".to_string())).await;
+        assert!(
+            res.is_err(),
+            "dry-run must reject a plain-http internet URL"
+        );
     }
 }

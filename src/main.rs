@@ -116,7 +116,16 @@ async fn run(cli: Cli) -> Result<()> {
                     '✗' => total_fail += 1,
                     _ => {}
                 };
-                println!("    {} {}{}", status, name, if msg.is_empty() { "".to_string() } else { format!(": {}", msg) });
+                println!(
+                    "    {} {}{}",
+                    status,
+                    name,
+                    if msg.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(": {}", msg)
+                    }
+                );
                 let _ = std::io::stdout().flush();
             };
 
@@ -136,10 +145,15 @@ async fn run(cli: Cli) -> Result<()> {
                     report('⚠', "EREBYX_API_KEY", "set but format doesn't match `erebyx_<48 hex chars>` — may not authenticate");
                 }
                 None => {
-                    report('✗', "EREBYX_API_KEY", "unset — get one at https://app.erebyx.com/keys");
+                    report(
+                        '✗',
+                        "EREBYX_API_KEY",
+                        "unset — get one at https://app.erebyx.com/keys",
+                    );
                 }
             }
-            let api_url = std::env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+            let api_url = std::env::var("EREBYX_API_URL")
+                .unwrap_or_else(|_| "https://core.erebyx.com".to_string());
             report('✓', "EREBYX_API_URL", &api_url);
             println!();
 
@@ -154,7 +168,11 @@ async fn run(cli: Cli) -> Result<()> {
                         Err(e) => {
                             let msg = e.to_string();
                             if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {
-                                report('✗', "Substrate auth", "rejected (401) — API key may be revoked or wrong tenant");
+                                report(
+                                    '✗',
+                                    "Substrate auth",
+                                    "rejected (401) — API key may be revoked or wrong tenant",
+                                );
                             } else {
                                 report('✗', "Substrate reachable", &msg);
                             }
@@ -178,13 +196,21 @@ async fn run(cli: Cli) -> Result<()> {
             println!("  Clients");
             let clients = setup::detect::detect_clients();
             if clients.is_empty() {
-                report('⚠', "No supported AI clients detected", "install Claude Code, Cursor, Windsurf, Continue, Zed, or VS Code");
+                report(
+                    '⚠',
+                    "No supported AI clients detected",
+                    "install Claude Code, Cursor, Windsurf, Continue, Zed, or VS Code",
+                );
             } else {
                 for client in &clients {
                     if client.config_exists {
                         report('✓', client.name, "configured");
                     } else {
-                        report('⚠', client.name, "detected but not configured (run `erebyx setup`)");
+                        report(
+                            '⚠',
+                            client.name,
+                            "detected but not configured (run `erebyx setup`)",
+                        );
                     }
                 }
             }
@@ -198,7 +224,14 @@ async fn run(cli: Cli) -> Result<()> {
                 println!("  Hook (Claude Code)");
                 let hook_path = cc.home_dir.join("hooks").join("erebyx-memory-injector.sh");
                 if !hook_path.exists() {
-                    report('⚠', "Hook script", &format!("missing ({}) — run `erebyx setup` to install", hook_path.display()));
+                    report(
+                        '⚠',
+                        "Hook script",
+                        &format!(
+                            "missing ({}) — run `erebyx setup` to install",
+                            hook_path.display()
+                        ),
+                    );
                 } else {
                     report('✓', "Hook script", &hook_path.display().to_string());
                     // Check executable bit on Unix
@@ -209,7 +242,11 @@ async fn run(cli: Cli) -> Result<()> {
                             Ok(meta) => {
                                 let mode = meta.permissions().mode() & 0o777;
                                 if mode & 0o100 == 0 {
-                                    report('⚠', "Hook executable bit", &format!("mode {:o} — should be 0700 (owner exec)", mode));
+                                    report(
+                                        '⚠',
+                                        "Hook executable bit",
+                                        &format!("mode {:o} — should be 0700 (owner exec)", mode),
+                                    );
                                 } else {
                                     report('✓', "Hook executable bit", &format!("mode {:o}", mode));
                                 }
@@ -755,7 +792,7 @@ async fn run_hook_inject() -> String {
 ///
 /// Mirrors claude-mem's #1 mechanic — the reason that project hit 46.1K
 /// GitHub stars: pre-populate the AI's system prompt with stored identity
-/// + the prior session's handoff BEFORE the first user prompt. The AI
+/// and the prior session's handoff BEFORE the first user prompt. The AI
 /// then KNOWS the context exists; it doesn't have to choose to call
 /// `restore_identity` on a session where the user happens not to mention
 /// memory.
@@ -851,10 +888,7 @@ async fn run_hook_session_start() -> String {
     };
 
     // === Render compact injection ===
-    let injection = render_session_start_injection(
-        identity_body.as_ref(),
-        context_body.as_ref(),
-    );
+    let injection = render_session_start_injection(identity_body.as_ref(), context_body.as_ref());
 
     if injection.trim().is_empty() {
         return empty;
@@ -873,10 +907,7 @@ async fn run_hook_session_start() -> String {
 /// chars) total. Declarative phrasing throughout (per the claude-code#17804
 /// injection-defense doctrine — `rules_content_uses_declarative_not_imperative_framing`
 /// test enforces the same shape on the static rules file).
-fn render_session_start_injection(
-    identity: Option<&Value>,
-    context: Option<&Value>,
-) -> String {
+fn render_session_start_injection(identity: Option<&Value>, context: Option<&Value>) -> String {
     let mut lines = Vec::new();
     lines.push("[EREBYX Memory — pre-loaded context]".to_string());
     let mut total_chars = lines[0].len();
@@ -1010,7 +1041,10 @@ mod hook_session_start_tests {
             "anchors": ["launch-prep", "cli", "coding"],
         });
         let out = render_session_start_injection(None, Some(&ctx));
-        assert!(out.contains("Last session handoff"), "expected handoff section");
+        assert!(
+            out.contains("Last session handoff"),
+            "expected handoff section"
+        );
         assert!(out.contains("rules.rs"), "expected what_we_built content");
         assert!(out.contains("session-start"), "expected whats_next content");
         assert!(out.contains("Recent anchors"), "expected anchors line");
@@ -1023,7 +1057,11 @@ mod hook_session_start_tests {
         let big = "x".repeat(10_000);
         let id = json!({"identity": {"name": "Z"}, "narrative": big});
         let out = render_session_start_injection(Some(&id), None);
-        assert!(out.len() <= 4000, "expected bounded output, got {}", out.len());
+        assert!(
+            out.len() <= 4000,
+            "expected bounded output, got {}",
+            out.len()
+        );
     }
 
     #[test]
@@ -1042,11 +1080,18 @@ mod hook_session_start_tests {
         });
         let out = render_session_start_injection(Some(&id), Some(&ctx));
         let lower = out.to_lowercase();
-        for banned in &["you must", "you should", "always call", "do not", "always remember"] {
+        for banned in &[
+            "you must",
+            "you should",
+            "always call",
+            "do not",
+            "always remember",
+        ] {
             assert!(
                 !lower.contains(banned),
                 "render output contains imperative phrase '{}': {}",
-                banned, out
+                banned,
+                out
             );
         }
     }

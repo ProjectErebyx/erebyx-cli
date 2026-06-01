@@ -239,7 +239,7 @@ mod tests {
 
     /// Lock the keyword-form examples in RULES_CONTENT against future drift.
     /// The substrate schema requires `query=...` for remember, `content=...`
-    /// + `category=...` for save, `what_we_built=...` + `whats_next=...` for
+    /// and `category=...` for save, `what_we_built=...` + `whats_next=...` for
     /// wrap_up. A previous version of this file used `remember('topic')`,
     /// `save()`, and `wrap_up()` — all three would 422 against the live
     /// schema. This test fails if anyone tries to revert.
@@ -270,7 +270,13 @@ mod tests {
     #[test]
     fn rules_content_has_no_marketing_language() {
         let lower = RULES_CONTENT.to_lowercase();
-        for banned in &["dramatically", "powerful", "intelligent", "consciousness", "magical"] {
+        for banned in &[
+            "dramatically",
+            "powerful",
+            "intelligent",
+            "consciousness",
+            "magical",
+        ] {
             assert!(
                 !lower.contains(banned),
                 "RULES_CONTENT contains marketing language '{}'. Replace with a factual description.",
@@ -315,11 +321,24 @@ mod tests {
         };
 
         // Write dynamic block — should appear AFTER the static block.
-        write_dynamic_block(&client, "Stored identity: ZENN\nLast handoff: shipped session-start hook").unwrap();
+        write_dynamic_block(
+            &client,
+            "Stored identity: ZENN\nLast handoff: shipped session-start hook",
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&rules_path).unwrap();
-        assert!(content.contains("<!-- EREBYX:START -->"), "static block survived");
-        assert!(content.contains("<!-- EREBYX:DYNAMIC:START -->"), "dynamic block written");
-        assert!(content.contains("Stored identity: ZENN"), "dynamic content present");
+        assert!(
+            content.contains("<!-- EREBYX:START -->"),
+            "static block survived"
+        );
+        assert!(
+            content.contains("<!-- EREBYX:DYNAMIC:START -->"),
+            "dynamic block written"
+        );
+        assert!(
+            content.contains("Stored identity: ZENN"),
+            "dynamic content present"
+        );
         // Order: STATIC must come before DYNAMIC.
         let static_pos = content.find("<!-- EREBYX:START -->").unwrap();
         let dynamic_pos = content.find("<!-- EREBYX:DYNAMIC:START -->").unwrap();
@@ -329,10 +348,18 @@ mod tests {
         );
 
         // Re-write dynamic block with new content — should REPLACE, not duplicate.
-        write_dynamic_block(&client, "Stored identity: ZENN\nLast handoff: dynamic refresh works").unwrap();
+        write_dynamic_block(
+            &client,
+            "Stored identity: ZENN\nLast handoff: dynamic refresh works",
+        )
+        .unwrap();
         let content2 = std::fs::read_to_string(&rules_path).unwrap();
         let dynamic_starts = content2.matches("<!-- EREBYX:DYNAMIC:START -->").count();
-        assert_eq!(dynamic_starts, 1, "expected exactly one EREBYX:DYNAMIC:START, got {}", dynamic_starts);
+        assert_eq!(
+            dynamic_starts, 1,
+            "expected exactly one EREBYX:DYNAMIC:START, got {}",
+            dynamic_starts
+        );
         assert!(
             content2.contains("dynamic refresh works"),
             "new content present"
