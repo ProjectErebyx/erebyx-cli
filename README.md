@@ -176,7 +176,7 @@ erebyx save "Discovered anchor-based retrieval improves recall by 40%" \
 
 erebyx remember "anchor retrieval performance" --limit 5
 erebyx remember "trading patterns" --anchors trading --time-range last-week
-erebyx remember --ids mem_abc123,mem_def456
+erebyx remember "anchor retrieval" --ids mem_abc123,mem_def456  # query is required, even with --ids
 ```
 
 ### Session end

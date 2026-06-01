@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Claude Code hooks — automatic memory injection before every response.
 //!
 //! Installs a UserPromptSubmit hook that calls `erebyx hook-inject` natively.

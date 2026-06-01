@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `erebyx setup` — one-command memory installation for all AI coding clients.
 //!
 //! Detects installed clients (Claude Code, Cursor, Windsurf, Continue, Zed, Copilot),
