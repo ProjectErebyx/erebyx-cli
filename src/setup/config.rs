@@ -179,9 +179,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     // frequently sync `~/.continue/` to public dotfiles repos; without
     // this guard, the YAML writer would silently leak the API key on
     // the next commit. Same allowlisted override (`EREBYX_ALLOW_GIT_TREE_CONFIG`).
-    if is_within_git_tree(&client.config_path)
-        && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG")
-    {
+    if is_within_git_tree(&client.config_path) && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG") {
         anyhow::bail!(
             "Refusing to write API key to {} — path is inside a git working \
              tree. Set EREBYX_ALLOW_GIT_TREE_CONFIG=1 to override, or move \
@@ -232,7 +230,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
                 break None;
             };
             let abs = search_from + rel + 1; // position of `m`
-            // Walk back to the start of THIS line to inspect any leading whitespace + `#`.
+                                             // Walk back to the start of THIS line to inspect any leading whitespace + `#`.
             let line_start = cleaned[..abs].rfind('\n').map(|i| i + 1).unwrap_or(0);
             let prefix = &cleaned[line_start..abs];
             if !prefix.trim_start().starts_with('#') {

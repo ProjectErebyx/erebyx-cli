@@ -108,20 +108,18 @@ pub fn map_actionable_error(raw: &str) -> String {
 
     // Authentication — most common first-touch failure.
     if raw.contains("401") || lower.contains("unauthorized") || lower.contains("auth") {
-        return format!(
-            "Authentication rejected (401). Check that EREBYX_API_KEY is set correctly.\n\
+        return "Authentication rejected (401). Check that EREBYX_API_KEY is set correctly.\n\
              • Verify in your shell: `echo $EREBYX_API_KEY`\n\
              • Get a fresh key at https://app.erebyx.com/keys\n\
              • Run `erebyx doctor` to diagnose."
-        );
+            .to_string();
     }
 
     // Permission / scope mismatch.
     if raw.contains("403") || lower.contains("forbidden") {
-        return format!(
-            "Permission denied (403). Your API key may not have the right scope for this operation.\n\
+        return "Permission denied (403). Your API key may not have the right scope for this operation.\n\
              Check your key's permissions at https://app.erebyx.com/keys."
-        );
+            .to_string();
     }
 
     // Validation — usually fixable in-line.
@@ -135,10 +133,9 @@ pub fn map_actionable_error(raw: &str) -> String {
 
     // Rate limit — actionable wait.
     if raw.contains("429") || lower.contains("rate limit") || lower.contains("too many requests") {
-        return format!(
-            "Rate limited (429). Wait a few seconds and retry.\n\
+        return "Rate limited (429). Wait a few seconds and retry.\n\
              If this keeps happening on a small workload, contact support@erebyx.com."
-        );
+            .to_string();
     }
 
     // Server errors — point at status page.

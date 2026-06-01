@@ -464,7 +464,10 @@ mod tests {
     #[test]
     fn shell_single_quote_neutralizes_metacharacters() {
         // No embedded single-quote → simple wrap.
-        assert_eq!(shell_single_quote("https://core.erebyx.com"), "'https://core.erebyx.com'");
+        assert_eq!(
+            shell_single_quote("https://core.erebyx.com"),
+            "'https://core.erebyx.com'"
+        );
         // Embedded single-quote → '\'' splice, no other char is special.
         assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
         // Metacharacters that the OLD `${VAR:-...}` interpolation let escape
@@ -504,7 +507,10 @@ mod tests {
         );
         // The literal payload, single-quoted, is what should be present.
         assert!(
-            script.contains(&format!("export EREBYX_API_URL={}", shell_single_quote(payload))),
+            script.contains(&format!(
+                "export EREBYX_API_URL={}",
+                shell_single_quote(payload)
+            )),
             "expected the api_url emitted as a single-quoted shell literal. Script:\n{script}"
         );
     }
@@ -544,7 +550,11 @@ mod tests {
                 "install_hooks guard must reject wrong-scheme api_url {bad:?}"
             );
         }
-        for ok in &["https://core.erebyx.com", "http://localhost:8080", "http://127.0.0.1:9000"] {
+        for ok in &[
+            "https://core.erebyx.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:9000",
+        ] {
             assert!(is_safe_url(ok), "valid api_url {ok:?} must pass");
         }
     }
@@ -570,7 +580,10 @@ mod tests {
         // `${EREBYX_API_URL:-https://evil}$(...)` and `}` + `$(...)` executed.
         let script = hook_script(payload);
         assert!(
-            script.contains(&format!("export EREBYX_API_URL={}", shell_single_quote(payload))),
+            script.contains(&format!(
+                "export EREBYX_API_URL={}",
+                shell_single_quote(payload)
+            )),
             "payload must be emitted as a single-quoted shell literal. Script:\n{script}"
         );
         assert!(
