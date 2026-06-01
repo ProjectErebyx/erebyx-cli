@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! MCP configuration file writing for each AI client.
 //!
 //! Each client has a different config format. We merge into existing configs

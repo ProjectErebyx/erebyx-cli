@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Rules file templates for each AI client.
 //!
 //! Each client gets behavioral instructions that guide proactive memory use.
