@@ -35,7 +35,7 @@ When v0.2 ships, v0.1.x receives security fixes for 90 days.
 ## Scope
 
 In scope:
-- The `erebyx` CLI binary distributed via `crates.io`, `cargo install`, or `npx @erebyx/install-mcp`
+- The `erebyx` CLI binary distributed via `crates.io` or `cargo install`
 - The MCP config writers that touch local AI client config files
 - API-key handling and storage
 - Network behavior (TLS, request signing, circuit breaker)

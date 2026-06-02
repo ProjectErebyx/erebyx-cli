@@ -7,19 +7,13 @@ Five minutes from zero to your first wrap-up.
 ## 0. Prerequisites
 
 - An EREBYX API key — get one at [app.erebyx.com/keys](https://app.erebyx.com/keys)
-- Either `cargo` (Rust 1.75+) **or** Node.js 18+ for the `npx` installer
+- `cargo` (Rust 1.75+)
 
 ---
 
 ## 1. Install (30 seconds)
 
-Pick one:
-
 ```bash
-# Option A — auto-configure every MCP-capable AI on the machine
-npx @erebyx/install-mcp@latest
-
-# Option B — install just the binary
 cargo install erebyx
 ```
 
@@ -182,7 +176,7 @@ All examples honor the same `X-Erebyx-Hint` protocol described above.
 ## Next steps
 
 - **Add to a script**: every command supports `--json` — pipe to `jq`, your agent loop, your CI
-- **Per-AI-client setup**: re-run `npx @erebyx/install-mcp@latest` whenever you install a new MCP-capable AI
+- **Per-AI-client setup**: re-run `erebyx setup` whenever you install a new MCP-capable AI
 - **Diagnose drift**: when an AI feels off, `erebyx restore-identity` is your first move
 - **Read the substrate docs**: [erebyx.com/docs](https://erebyx.com/docs)
 

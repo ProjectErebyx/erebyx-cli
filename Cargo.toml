@@ -10,6 +10,7 @@ homepage = "https://erebyx.com"
 readme = "README.md"
 keywords = ["mcp", "ai", "memory", "claude", "cli"]
 categories = ["command-line-utilities"]
+exclude = [".github/"]
 
 [[bin]]
 name = "erebyx"

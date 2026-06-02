@@ -18,8 +18,8 @@ Quickstart:
   erebyx setup                          # auto-detect + write configs
   erebyx doctor                         # verify the wiring
 
-Docs:    https://github.com/ProjectErebyx/erebyx-cookbook
-Issues:  https://github.com/ProjectErebyx/EREBYX-CLI/issues",
+Docs:    https://erebyx.com/core
+Issues:  https://github.com/ProjectErebyx/erebyx-cli/issues",
     after_help = "Run `erebyx <COMMAND> --help` for command-specific options.
 
 Most users only need:  erebyx setup  +  erebyx doctor."
