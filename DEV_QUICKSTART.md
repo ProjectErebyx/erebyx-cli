@@ -158,16 +158,16 @@ For ambiguous errors, run `erebyx doctor` — it audits your config across every
 
 The CLI is one of several integration paths. For your specific harness, see the matching example in the substrate repo:
 
-- [Claude Code](https://erebyx.com/docs/integrations/claude-code) — full lifecycle hooks, paste-the-JSON setup
-- [Cursor](https://erebyx.com/docs/integrations/cursor) — `.cursor/mcp.json` entry, hints automatic
-- [Anthropic Agent SDK](https://erebyx.com/docs/integrations/anthropic-agent-sdk) — raw tool-use loop
-- [OpenAI Responses API](https://erebyx.com/docs/integrations/openai-responses-api) — raw API integration
-- [Letta](https://erebyx.com/docs/integrations/letta) — agent self-decides cadence
-- [LangGraph](https://erebyx.com/docs/integrations/langgraph) — graph node lifecycle
-- [AutoGen](https://erebyx.com/docs/integrations/autogen) — multi-agent message events
-- [CrewAI](https://erebyx.com/docs/integrations/crewai) — role-based agent lifecycle
-- [Raw HTTP / curl](https://erebyx.com/docs/integrations/raw-http) — single-line save loop
-- [Future / unknown harness](https://erebyx.com/docs/integrations/future-harness) — protocol-level forward-compat
+- [Claude Code](https://erebyx.com/core) — full lifecycle hooks, paste-the-JSON setup
+- [Cursor](https://erebyx.com/core) — `.cursor/mcp.json` entry, hints automatic
+- [Anthropic Agent SDK](https://erebyx.com/core) — raw tool-use loop
+- [OpenAI Responses API](https://erebyx.com/core) — raw API integration
+- [Letta](https://erebyx.com/core) — agent self-decides cadence
+- [LangGraph](https://erebyx.com/core) — graph node lifecycle
+- [AutoGen](https://erebyx.com/core) — multi-agent message events
+- [CrewAI](https://erebyx.com/core) — role-based agent lifecycle
+- [Raw HTTP / curl](https://erebyx.com/core) — single-line save loop
+- [Future / unknown harness](https://erebyx.com/core) — protocol-level forward-compat
 
 All examples honor the same `X-Erebyx-Hint` protocol described above.
 
@@ -178,7 +178,7 @@ All examples honor the same `X-Erebyx-Hint` protocol described above.
 - **Add to a script**: every command supports `--json` — pipe to `jq`, your agent loop, your CI
 - **Per-AI-client setup**: re-run `erebyx setup` whenever you install a new MCP-capable AI
 - **Diagnose drift**: when an AI feels off, `erebyx restore-identity` is your first move
-- **Read the substrate docs**: [erebyx.com/docs](https://erebyx.com/docs)
+- **Read the substrate docs**: [EREBYX Core docs](https://erebyx.com/core)
 
 ---
 

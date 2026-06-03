@@ -57,7 +57,7 @@ erebyx setup
 # Restart Claude Code
 ```
 
-See [cookbook/claude-code](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/claude-code/README.md)
+See the [/core setup guide](https://erebyx.com/core)
 
 </td>
 <td>
@@ -70,7 +70,7 @@ erebyx setup
 # Restart Cursor
 ```
 
-See [cookbook/cursor](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/cursor/README.md)
+See the [/core setup guide](https://erebyx.com/core)
 
 </td>
 <td>
@@ -81,7 +81,7 @@ erebyx setup
 # Walks API key + config
 ```
 
-Or call the HTTP API directly: see [cookbook/raw-http](https://github.com/ProjectErebyx/erebyx-cookbook/blob/main/raw-http/README.md)
+Or call the HTTP API directly: see the [/core setup guide](https://erebyx.com/core)
 
 </td>
 </tr>
@@ -252,9 +252,8 @@ cargo build --release
 
 - [`erebyx-sdk`](https://github.com/ProjectErebyx/erebyx-sdk) — Rust SDK (type-safe substrate client)
 - [`@erebyx/sdk`](https://github.com/ProjectErebyx/erebyx-sdk-node) — Node.js / TypeScript SDK
-- [`erebyx-extension`](https://github.com/ProjectErebyx/erebyx-extension) — browser extension for ChatGPT + Claude.ai
-- [Substrate docs](https://erebyx.com/docs)
-- [Per-harness integration examples](https://erebyx.com/docs/integrations) — 11 harnesses, copy-paste integration
+- [EREBYX Core docs](https://erebyx.com/core)
+- [Per-harness integration examples](https://erebyx.com/core) — 11 harnesses, copy-paste integration
 
 ---
 
