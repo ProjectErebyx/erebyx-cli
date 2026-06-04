@@ -94,7 +94,7 @@ detected AI client's MCP config file (e.g. `~/.claude/settings.json`,
 
 | Area | Current limitation | Target fix |
 |---|---|---|
-| Client-side encryption | Memory is encrypted in transit (TLS 1.3) and at rest using XChaCha20-Poly1305 envelope encryption (AES-256-GCM legacy supported on existing rows) with per-tenant Key Encryption Keys wrapped under a server-held master KEK. At v0.1.1 EREBYX operationally holds the master KEK; per-user zero-knowledge encryption (passphrase-derived keys, EREBYX cannot decrypt) ships in v0.2. The browser extension already implements client-side AES-256-GCM today. | v0.2+ |
+| Client-side encryption | Memory is encrypted in transit (TLS 1.3) and at rest using XChaCha20-Poly1305 envelope encryption (AES-256-GCM legacy supported on existing rows) with per-tenant Key Encryption Keys wrapped under a server-held master KEK. At v0.1.1 EREBYX operationally holds the master KEK; per-user zero-knowledge encryption (passphrase-derived keys, EREBYX cannot decrypt) ships in v0.2. | v0.2+ |
 | Windows ACL hardening | v0.1.1 emits a warning instead of setting a user-only DACL on written configs. v0.1.2 will wire `windows-acl` or equivalent to close the multi-user-host gap. | v0.1.2 |
 | API-key rotation | Manual rotation via `app.erebyx.com/keys`; CLI does not yet auto-rotate | v0.2 |
 | Sandbox for `setup` writers | Config writers touch real client-config files; no dry-run mode | v0.1.x |
