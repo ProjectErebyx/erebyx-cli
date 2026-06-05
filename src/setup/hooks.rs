@@ -833,7 +833,7 @@ mod tests {
         // Back-compat with v0.1.0 installs that lack the flag.
         let entry = json!({
             "type": "command",
-            "command": "/Users/mikey/.claude/hooks/erebyx-memory-injector.sh",
+            "command": "/Users/me/.claude/hooks/erebyx-memory-injector.sh",
         });
         assert!(should_remove_hook_entry(&entry));
     }
@@ -852,8 +852,8 @@ mod tests {
         // Pre-fix the substring filter `c.contains("erebyx")` would
         // wipe this. Now we accept only exact-form matches.
         for cmd in &[
-            "/Users/mikey/bin/erebyx-archive-export",
-            "/Users/mikey/scripts/my-erebyx-extras.sh",
+            "/Users/me/bin/erebyx-archive-export",
+            "/Users/me/scripts/my-erebyx-extras.sh",
             "/usr/local/bin/erebyx-backup",
             "erebyx --version && other-tool", // wraps in shell
             "python /opt/erebyx-tools/sync.py",

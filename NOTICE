@@ -29,3 +29,7 @@ upstream repositories.
 - colored (MPL-2.0) — https://github.com/colored-rs/colored
   Source-availability obligation: the MPL-2.0 attaches to the colored
   crate itself if modified. The colored crate is used unmodified.
+- option-ext (MPL-2.0) — https://github.com/soc/option-ext
+  Linked transitively via `dirs` → `dirs-sys`. The MPL-2.0 source-availability
+  obligation attaches to the option-ext crate itself if modified; it is used
+  unmodified.
