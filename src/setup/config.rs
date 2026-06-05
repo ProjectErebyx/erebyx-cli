@@ -261,14 +261,10 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     // Atomic + owner-only write. Previously a bare `fs::write` + post-hoc
     // chmod, which (a) left a window where the key-bearing YAML was
     // world-readable, and (b) could truncate the user's whole Continue
-    // config on a crash. `atomic_write_secret` closes both.
+    // config on a crash. `atomic_write_secret` closes both — and folds the
+    // Windows DACL tighten in at the write boundary, so no caller-side
+    // hardening is needed here.
     atomic_write_secret(&client.config_path, new_content.as_bytes())?;
-
-    // Windows DACL hardening (fail-soft) — see `write_json` for rationale.
-    #[cfg(windows)]
-    {
-        secure_write::harden_windows_acl(&client.config_path);
-    }
 
     Ok(client.config_path.clone())
 }
@@ -533,17 +529,9 @@ fn write_json(path: &std::path::Path, value: &Value) -> Result<()> {
     // world-readable even transiently.
     atomic_write_secret(path, content.as_bytes())?;
 
-    // P0-4 (2026-05-27) → v0.1.2: tighten the Windows DACL on the
-    // key-bearing file. `harden_windows_acl` shells to `icacls` with args as
-    // a vec (no shell parsing) and FAILS SOFT to the previous warn-only
-    // behavior if icacls is missing / errors, so the downside is never worse
-    // than before. HIGHEST runtime risk in the v0.1.2 set — see the helper's
-    // docstring; MUST be tested on a multi-user / domain-joined Windows box
-    // before tagging.
-    #[cfg(windows)]
-    {
-        secure_write::harden_windows_acl(path);
-    }
+    // Windows DACL hardening is folded into `atomic_write_secret` (it re-tightens
+    // at the write boundary — the atomic rename would otherwise revert any
+    // caller-side DACL), so no caller-side `harden_windows_acl` is needed here.
 
     Ok(())
 }

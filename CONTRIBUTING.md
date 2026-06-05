@@ -30,7 +30,7 @@ cargo test
 ```
 
 Required toolchain:
-- Rust 1.75 or later (`rustup install stable`)
+- Rust 1.85 or later (`rustup install stable`)
 - `cargo fmt` + `cargo clippy` components
 
 ---
@@ -79,7 +79,7 @@ PRs that touch the wire protocol (`client.rs`) require an extra reviewer.
 
 ## Scope
 
-The CLI surfaces the v0.1.1 cognitive verbs: `restore-identity`, `load-context`, `save`, `remember`, `wrap-up` plus operational commands (`setup`, `doctor`, `health`, `load-context`).
+The CLI surfaces the v0.1.1 cognitive verbs: `restore-identity`, `load-context`, `save`, `remember`, `wrap-up` plus operational commands (`setup`, `doctor`, `health`).
 
 All EREBYX processing — memory understanding, recall, organization, encryption — lives in the closed-source `erebyx-os` engine. Client-side issues — install UX, MCP config writers, output formatting, error messages, `X-Erebyx-Hint` parsing — are in scope here.
 

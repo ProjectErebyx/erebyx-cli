@@ -109,20 +109,24 @@ jobs:
         run: cargo test --all-targets --locked --verbose
 
   # CLI v0.1.2 fix [F10]: guard the declared MSRV. Cargo.toml pins
-  # `rust-version = "1.75"`, but every other job runs `@stable`, so a stray
-  # use of a newer-than-1.75 std/lang feature would compile green in CI yet
-  # break `cargo install` for a user on the documented minimum toolchain.
-  # Build (not test — dev-deps may legitimately need a newer toolchain) on
-  # exactly 1.75 with `--locked` to catch that drift.
+  # `rust-version = "1.85"` — the real floor, driven by in-graph deps
+  # `hashbrown` 0.17 and `indexmap` 2.14 (pulled by reqwest's hyper stack),
+  # which both declare rust-version 1.85; and `Cargo.lock` is format v4, which
+  # only Cargo >= 1.78 can parse at all. Every other job runs `@stable`, so a
+  # stray use of a newer-than-1.85 std/lang feature — or a dep bump that raises
+  # the floor — would compile green in CI yet break `cargo install` for a user
+  # on the documented minimum toolchain. Build (not test — dev-deps may
+  # legitimately need a newer toolchain) on exactly 1.85 with `--locked` to
+  # catch that drift.
   msrv:
-    name: MSRV build (1.75)
+    name: MSRV build (1.85)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (1.75 — declared MSRV)
-        uses: dtolnay/rust-toolchain@1.75
+      - name: Install Rust toolchain (1.85 — declared MSRV)
+        uses: dtolnay/rust-toolchain@1.85
 
       - name: Cache cargo registry + target
         uses: actions/cache@v4

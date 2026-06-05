@@ -62,6 +62,11 @@ Surface-hardening release. No wire-protocol or CLI-flag breaking changes.
   used.
 - **Crate packaging** switched from an `exclude` list to an explicit `include`
   allowlist so only intended files ever ship.
+- **MSRV raised to Rust 1.85** (was 1.75). The current `reqwest` / `hyper`
+  dependency stack pulls `hashbrown` 0.17 and `indexmap` 2.14, which declare
+  `rust-version = 1.85`, and `Cargo.lock` is now format v4 (parseable only by
+  Cargo ≥ 1.78). A new CI job builds on exactly 1.85 with `--locked` so the
+  declared MSRV stays honest against future dependency bumps.
 
 ### CI / Release
 

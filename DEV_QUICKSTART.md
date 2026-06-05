@@ -7,7 +7,7 @@ Five minutes from zero to your first wrap-up.
 ## 0. Prerequisites
 
 - An EREBYX API key — get one at [app.erebyx.com/keys](https://app.erebyx.com/keys)
-- `cargo` (Rust 1.75+)
+- `cargo` (Rust 1.85+)
 
 ---
 
