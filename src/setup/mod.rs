@@ -359,7 +359,11 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     Ok(())
 }
 
-pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Result<()> {
+pub async fn run_setup(
+    api_key: Option<String>,
+    api_url: Option<String>,
+    assume_yes: bool,
+) -> Result<()> {
     println!();
     println!("{}", "  EREBYX setup — universal AI memory".bold().cyan());
     println!(
@@ -429,11 +433,23 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
     let already_configured: Vec<&AiClient> = clients.iter().filter(|c| c.config_exists).collect();
 
     let to_configure: Vec<&AiClient> = if unconfigured.is_empty() {
-        // All already configured — ask if they want to reconfigure
-        let reconfigure = Confirm::new()
-            .with_prompt("  All clients already configured. Reconfigure?")
-            .default(false)
-            .interact()?;
+        // All already configured — ask if they want to reconfigure.
+        // CLI v0.1.2 (--yes fix): `Confirm` needs a TTY; under CI /
+        // non-interactive re-provisioning it errors with `not a terminal`
+        // and exits 1. `--yes`/`--force` skips the prompt (auto-yes) so a
+        // re-run reconfigures every client without a terminal.
+        let reconfigure = if assume_yes {
+            println!(
+                "  {} --yes: reconfiguring all already-configured clients.",
+                "✓".green().bold()
+            );
+            true
+        } else {
+            Confirm::new()
+                .with_prompt("  All clients already configured. Reconfigure?")
+                .default(false)
+                .interact()?
+        };
 
         if reconfigure {
             clients.iter().collect()
@@ -448,10 +464,18 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
             already_configured.len(),
             unconfigured.len()
         );
-        let include_existing = Confirm::new()
-            .with_prompt("  Also reconfigure already-configured clients?")
-            .default(false)
-            .interact()?;
+        let include_existing = if assume_yes {
+            println!(
+                "  {} --yes: also reconfiguring already-configured clients.",
+                "✓".green().bold()
+            );
+            true
+        } else {
+            Confirm::new()
+                .with_prompt("  Also reconfigure already-configured clients?")
+                .default(false)
+                .interact()?
+        };
 
         if include_existing {
             clients.iter().collect()
@@ -639,6 +663,19 @@ pub async fn run_setup(api_key: Option<String>, api_url: Option<String>) -> Resu
         "Run `erebyx doctor` to verify all connections.".dimmed()
     );
     println!();
+
+    // CLI v0.1.2 (exit-code fix): if we attempted to configure clients but
+    // EVERY one failed, setup must exit non-zero. Pre-fix it returned Ok(())
+    // even on total failure, so `erebyx setup && <next>` chained past a
+    // completely broken install (e.g. unwritable config dirs in CI). A
+    // partial success (some clients configured) stays exit 0 — the errors
+    // are surfaced above and the working clients are usable.
+    if success_count == 0 {
+        anyhow::bail!(
+            "setup failed for all {} client(s) — no MCP config was written. See the ⚠ lines above.",
+            to_configure.len()
+        );
+    }
 
     Ok(())
 }

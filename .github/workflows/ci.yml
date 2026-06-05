@@ -44,9 +44,17 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+  # CLI v0.1.2 fix [11]: run clippy on every OS so the platform-specific
+  # path / hook / icacls code (cfg!(target_os = ...) blocks) is actually
+  # compiled + linted on every PR — not just on Linux where those arms are
+  # `#[cfg]`'d out and never seen.
   clippy:
-    name: clippy
-    runs-on: ubuntu-latest
+    name: clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,9 +78,15 @@ jobs:
       - name: cargo clippy -D warnings
         run: cargo clippy --all-targets --locked -- -D warnings
 
+  # CLI v0.1.2 fix [11]: test on every OS so platform-gated behavior
+  # (Windows path joins, Unix permission bits, etc.) is exercised per PR.
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -93,3 +107,27 @@ jobs:
 
       - name: cargo test
         run: cargo test --all-targets --locked --verbose
+
+  # CLI v0.1.2 fix [12]: advisory + license + bans gate. Blocks merges that
+  # pull a dependency with a known RUSTSEC advisory, a disallowed license, or
+  # a banned/duplicate crate. The release publish job `needs:` the equivalent
+  # gate so a known-vuln dep can never ship to crates.io.
+  audit:
+    name: cargo audit + deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo audit (RUSTSEC advisories)
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo deny check (advisories + licenses + bans + sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

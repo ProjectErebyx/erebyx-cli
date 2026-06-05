@@ -162,6 +162,16 @@ pub enum Commands {
         /// before running it for real.
         #[arg(long)]
         dry_run: bool,
+
+        /// Skip all interactive confirmation prompts (auto-yes).
+        ///
+        /// Without this, a second `erebyx setup` when every client is
+        /// already configured stops at a "Reconfigure?" prompt that needs
+        /// a TTY — so it errors with `not a terminal` and exits 1 under
+        /// CI / non-interactive re-provisioning. Pass `--yes` (or `-y` /
+        /// `--force`) to reconfigure non-interactively.
+        #[arg(long, short = 'y', visible_alias = "force")]
+        yes: bool,
     },
 
     /// Check EREBYX server health and client configurations

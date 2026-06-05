@@ -33,6 +33,29 @@ async fn main() {
     }
 }
 
+/// Return true if `key` matches the advertised EREBYX API-key format:
+/// the literal prefix `erebyx_` followed by exactly 48 lowercase hex
+/// characters (55 chars total).
+///
+/// CLI v0.1.2 fix [8]: the old gate (`starts_with("erebyx_") && len()>=32`)
+/// was far looser than the documented `erebyx_<48 hex chars>` shape, so a
+/// 35-char paste of garbage rendered a false `✓ set` in `erebyx doctor`.
+/// The auth section still does the real check against the substrate; this
+/// just stops the Environment section from over-claiming on an obviously
+/// malformed key.
+///
+/// NOTE (verify-before-publish): the `erebyx_<48 hex>` length/charset is
+/// taken from the documented format in this crate (config.rs, doctor copy)
+/// and the issuer copy at app.erebyx.com/keys. If the issuer ever changes
+/// the key shape (length or charset), update this predicate in lockstep.
+fn is_well_formed_api_key(key: &str) -> bool {
+    const HEX_LEN: usize = 48;
+    let Some(body) = key.strip_prefix("erebyx_") else {
+        return false;
+    };
+    body.len() == HEX_LEN && body.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 async fn run(cli: Cli) -> Result<()> {
     let json_mode = cli.json;
 
@@ -65,6 +88,7 @@ async fn run(cli: Cli) -> Result<()> {
             api_key,
             api_url,
             dry_run,
+            yes,
         } => {
             // P1-6 (2026-05-27): the `--api-key <key>` form lands the
             // credential in shell history, ps auxww, and shell-completion
@@ -82,7 +106,7 @@ async fn run(cli: Cli) -> Result<()> {
             if dry_run {
                 setup::run_setup_dry_run(api_key, api_url).await?;
             } else {
-                setup::run_setup(api_key, api_url).await?;
+                setup::run_setup(api_key, api_url, yes).await?;
             }
         }
 
@@ -137,9 +161,13 @@ async fn run(cli: Cli) -> Result<()> {
             println!("  Environment");
             let api_key = std::env::var("EREBYX_API_KEY").ok();
             match api_key.as_deref() {
-                Some(k) if k.starts_with("erebyx_") && k.len() >= 32 => {
-                    let preview = format!("{}…", &k[..10]);
-                    report('✓', "EREBYX_API_KEY", &format!("set ({})", preview));
+                Some(k) if is_well_formed_api_key(k) => {
+                    // CLI v0.1.2 fix [8]: build the preview char-by-char.
+                    // `&k[..10]` panics if a multibyte char (emoji from a
+                    // bad paste) straddles bytes 7-9. `.chars().take(10)`
+                    // is char-boundary-safe and can never panic.
+                    let preview: String = k.chars().take(10).collect();
+                    report('✓', "EREBYX_API_KEY", &format!("set ({}…)", preview));
                 }
                 Some(_) => {
                     report('⚠', "EREBYX_API_KEY", "set but format doesn't match `erebyx_<48 hex chars>` — may not authenticate");
@@ -162,8 +190,12 @@ async fn run(cli: Cli) -> Result<()> {
             if api_key.is_none() {
                 report('✗', "Substrate auth", "skipped — EREBYX_API_KEY unset");
             } else {
+                // CLI v0.1.2 fix [N3]: probe an AUTHENTICATED route
+                // (`tools/list` on `/mcp/`) rather than the unauthenticated
+                // `/health` — a revoked/garbage key must surface as a 401,
+                // not a false green "key accepted".
                 match ErebyxClient::new() {
-                    Ok(client) => match client.health().await {
+                    Ok(client) => match client.probe_auth().await {
                         Ok(_) => report('✓', "Substrate reachable + key accepted", ""),
                         Err(e) => {
                             let msg = e.to_string();
@@ -172,6 +204,14 @@ async fn run(cli: Cli) -> Result<()> {
                                     '✗',
                                     "Substrate auth",
                                     "rejected (401) — API key may be revoked or wrong tenant",
+                                );
+                            } else if msg.contains("403")
+                                || msg.to_lowercase().contains("forbidden")
+                            {
+                                report(
+                                    '✗',
+                                    "Substrate auth",
+                                    "forbidden (403) — key lacks scope for this tenant",
                                 );
                             } else {
                                 report('✗', "Substrate reachable", &msg);
@@ -278,6 +318,17 @@ async fn run(cli: Cli) -> Result<()> {
                 println!("  All checks passing — substrate, clients, and hooks are wired.");
             }
             println!();
+
+            // CLI v0.1.2 (exit-code fix): doctor exited 0 even when a
+            // critical check failed (substrate unreachable / key rejected /
+            // client init error), so `erebyx doctor && <next>` chained past
+            // a broken install. Exit non-zero on any ✗ so CI / shell `&&`
+            // see the failure. Warnings (⚠) stay exit 0 — they're
+            // non-blocking. Exit code 2 distinguishes "ran, found failures"
+            // from the top-level exit 1 used for unhandled errors.
+            if total_fail > 0 {
+                std::process::exit(2);
+            }
         }
 
         Commands::RestoreIdentity {
@@ -1005,6 +1056,64 @@ fn render_session_start_injection(identity: Option<&Value>, context: Option<&Val
     }
 
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod api_key_format_tests {
+    use super::is_well_formed_api_key;
+
+    #[test]
+    fn accepts_canonical_key() {
+        // erebyx_ + exactly 48 hex chars.
+        let key = format!("erebyx_{}", "a".repeat(48));
+        assert!(is_well_formed_api_key(&key));
+        let hexy = format!("erebyx_{}", "0123456789abcdef".repeat(3)); // 48 hex
+        assert!(is_well_formed_api_key(&hexy));
+    }
+
+    #[test]
+    fn rejects_short_garbage_key() {
+        // CLI v0.1.2 fix [8]: a 35-char key that merely starts with the
+        // prefix used to render a false ✓. The tightened gate rejects it.
+        let key = "erebyx_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // 35 chars, non-hex body
+        assert!(!is_well_formed_api_key(key));
+    }
+
+    #[test]
+    fn rejects_wrong_length() {
+        assert!(!is_well_formed_api_key(&format!(
+            "erebyx_{}",
+            "a".repeat(47)
+        )));
+        assert!(!is_well_formed_api_key(&format!(
+            "erebyx_{}",
+            "a".repeat(49)
+        )));
+    }
+
+    #[test]
+    fn rejects_non_hex_body() {
+        // 48 chars but contains a non-hex char (g, z).
+        let key = format!("erebyx_{}g", "a".repeat(47));
+        assert!(!is_well_formed_api_key(&key));
+    }
+
+    #[test]
+    fn rejects_missing_prefix() {
+        assert!(!is_well_formed_api_key(&"a".repeat(55)));
+    }
+
+    #[test]
+    fn multibyte_key_does_not_panic_and_is_rejected() {
+        // The exact paste error that crashed the doctor preview: an emoji
+        // straddling the first bytes. is_well_formed_api_key must reject it
+        // (and never panic), and the preview path uses .chars() so it's safe.
+        let key = "erebyx_🤘xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        assert!(!is_well_formed_api_key(key));
+        // Mirror the doctor preview construction to prove it can't panic.
+        let preview: String = key.chars().take(10).collect();
+        assert!(!preview.is_empty());
+    }
 }
 
 #[cfg(test)]

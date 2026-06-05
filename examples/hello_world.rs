@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Quick-start example: save a memory, then retrieve it.
 //!
 //! Run:
@@ -95,11 +95,19 @@ async fn call_mcp_tool(
 }
 
 /// Truncate a JSON value's string form for terminal-friendly preview.
+///
+/// CLI v0.1.2 fix [15]: `&s[..240]` panics if a multibyte char (e.g. an
+/// emoji in a memory body) straddles byte 240. Walk back to the nearest
+/// char boundary so the example never panics on real-world content.
 fn short(v: &Value) -> String {
     let s = v.to_string();
     if s.len() <= 240 {
         s
     } else {
-        format!("{}…", &s[..240])
+        let mut end = 240;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
