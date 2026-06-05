@@ -48,6 +48,24 @@ fn resolve_session_id() -> String {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             }
+        } else {
+            // CLI v0.1.2 fix [N2]: persisting the session id failed
+            // (unwritable $HOME, read-only fs, full disk). Pre-fix we
+            // silently returned a fresh per-process id every run, so the
+            // `X-Erebyx-Session-Id` header churned on every call and
+            // server-side session attribution looked random with no clue
+            // why. Warn ONCE (Once-guarded so we don't spam every call)
+            // that the id won't be stable — but never fail the call, the
+            // id is still usable for this process.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "erebyx: could not persist session id to {} — using a per-process id \
+                     (session attribution will not be stable across runs). \
+                     Set EREBYX_SESSION_ID to a fixed value to silence this.",
+                    path.display()
+                );
+            });
         }
         return fresh;
     }
@@ -463,6 +481,63 @@ impl ErebyxClient {
         serde_json::from_str(&body).context("Invalid JSON in MCP response")
     }
 
+    /// Authenticated, side-effect-free auth probe for `erebyx doctor`.
+    ///
+    /// CLI v0.1.2 fix [N3]: the doctor's auth check previously called
+    /// `health()`, which GETs the *unauthenticated* `/health` route — so a
+    /// revoked or garbage key still reported green ("key accepted"). This
+    /// instead POSTs a JSON-RPC `tools/list` to the bearer-authenticated
+    /// `/mcp/` endpoint:
+    ///   - It is the SAME endpoint every real tool call already uses, so it
+    ///     is guaranteed to exist and to enforce auth (a bad token yields a
+    ///     non-2xx — typically 401 — before the JSON-RPC layer).
+    ///   - `tools/list` only enumerates the server's tool schema; it never
+    ///     executes a tool, so it creates NO memory and costs nothing on the
+    ///     user's substrate (unlike a `save`/`remember` round-trip).
+    ///
+    /// Returns `Ok(())` on a 2xx, and an `Err` whose message carries the HTTP
+    /// status on any non-2xx (so the doctor can branch on "401" → rejected).
+    ///
+    /// SERVER-CONFIRM (verify-before-publish): `tools/list` is a standard MCP
+    /// method the substrate already answers during the stdio handshake
+    /// (`mcp-serve` proxies it). If the substrate ever stops accepting
+    /// `tools/list` over the HTTP `/mcp/` transport, swap this for the
+    /// cheapest authenticated route the server team confirms.
+    pub async fn probe_auth(&self) -> Result<()> {
+        let url = format!("{}/mcp/", self.base_url.trim_end_matches('/'));
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        });
+
+        let mut rb = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .bearer_auth(&self.api_key)
+            .header("X-Instance-ID", &self.instance_id)
+            .header("X-Erebyx-Session-Id", session_id());
+        if let Some(ref p) = self.passphrase {
+            rb = rb.header("X-Passphrase", p);
+        }
+        let response = rb
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to connect to EREBYX")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Surface the status code so the doctor can distinguish a 401
+            // (auth rejected) from a 5xx (substrate down).
+            anyhow::bail!("Auth probe returned HTTP {}", status.as_u16());
+        }
+        Ok(())
+    }
+
     /// Anonymous server-reachability probe — no API key required.
     ///
     /// The substrate's `/health` route is intentionally unauthenticated so
@@ -555,6 +630,64 @@ fn truncate_safe(s: &str, max_len: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+#[cfg(test)]
+mod probe_auth_tests {
+    use super::*;
+    use serial_test::serial;
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+    fn client_for(uri: &str) -> ErebyxClient {
+        std::env::set_var("EREBYX_API_KEY", "erebyx_test_key");
+        std::env::set_var("EREBYX_API_URL", uri);
+        std::env::remove_var("EREBYX_PASSPHRASE");
+        let c = ErebyxClient::new().expect("client builds for test");
+        // The URL guard rejects plain http to non-localhost; wiremock binds
+        // 127.0.0.1 so it's allowed. Clean the env immediately after build.
+        std::env::remove_var("EREBYX_API_URL");
+        std::env::remove_var("EREBYX_API_KEY");
+        c
+    }
+
+    /// CLI v0.1.2 fix [N3]: probe_auth POSTs `tools/list` (authenticated,
+    /// side-effect-free) and treats a 2xx as success.
+    #[tokio::test]
+    #[serial]
+    async fn probe_auth_ok_on_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/mcp/"))
+            .and(matchers::header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "result": { "tools": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server.uri());
+        assert!(client.probe_auth().await.is_ok());
+    }
+
+    /// A revoked/garbage key yields a 401 — probe_auth must Err with a
+    /// message carrying the status so the doctor can branch on "401".
+    #[tokio::test]
+    #[serial]
+    async fn probe_auth_surfaces_401() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/mcp/"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server.uri());
+        let err = client.probe_auth().await.expect_err("401 must Err");
+        assert!(
+            format!("{err}").contains("401"),
+            "error must reference the 401 status, got: {err}"
+        );
+    }
 }
 
 #[cfg(test)]

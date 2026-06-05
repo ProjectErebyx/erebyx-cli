@@ -1,0 +1,69 @@
+# cargo-deny configuration for the `erebyx` CLI crate.
+#
+# CLI v0.1.2 fix [12]: gates the dependency tree on three axes —
+#   * advisories — fail HARD on a security vulnerability or a yanked crate;
+#                  surface (warn) unmaintained/notice advisories
+#   * licenses   — only ship dependencies under an explicitly-allowed license
+#   * bans       — fail on banned crates (none yet) and flag duplicate versions
+#
+# Run locally with: `cargo deny check`
+# Schema targets cargo-deny 0.16+ (the version pulled by
+# EmbarkStudios/cargo-deny-action@v2 in .github/workflows/ci.yml).
+
+[advisories]
+# A yanked dependency must fail so the lockfile can't pin a withdrawn release.
+yanked = "deny"
+# `unmaintained` is scoped to "workspace" so a transitive-only unmaintained
+# crate (one we don't depend on directly and can't fix) warns rather than
+# hard-blocks an otherwise-clean release. Direct-dependency security
+# vulnerabilities still fail hard (that's the default for the `vulnerability`
+# class, which cargo-deny always denies).
+#
+# This currently downgrades RUSTSEC-2025-0119 (number_prefix unmaintained, a
+# transitive dep of `indicatif` with no safe upstream upgrade) from a hard
+# fail to a warning. Re-evaluate when indicatif migrates off it.
+unmaintained = "workspace"
+# Documented, intentional exceptions only — never a blanket ignore. Empty for
+# now: the only outstanding advisory is the transitive `unmaintained` one
+# above, which `unmaintained = "workspace"` already handles.
+ignore = []
+
+[licenses]
+# Explicit allowlist. Every license below is OSI-approved permissive or a
+# weak/file-level copyleft (MPL-2.0) acceptable for a redistributed binary.
+# `cargo deny check licenses` fails on anything not listed here, so a new
+# dependency under a stronger copyleft (GPL/AGPL/LGPL-only) blocks the build.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+# Treat a license expression as satisfied when AT LEAST this fraction of the
+# license text matches a known template. 0.8 is the cargo-deny default.
+confidence-threshold = 0.8
+
+[bans]
+# Warn (don't fail) on multiple versions of the same crate — duplicates bloat
+# the binary but aren't a correctness/security issue on their own.
+multiple-versions = "warn"
+# Prefer the highest semver-compatible version when a duplicate is unavoidable.
+wildcards = "warn"
+# No crates are outright banned yet. Add entries here (with a reason) to block
+# a specific crate from ever entering the tree.
+deny = []
+
+[sources]
+# Only crates.io is an allowed registry; refuse git/unknown sources so a
+# dependency can't be silently pulled from an arbitrary URL.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

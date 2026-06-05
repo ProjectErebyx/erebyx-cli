@@ -11,13 +11,20 @@ use std::path::PathBuf;
 
 use super::detect::{AiClient, ClientKind};
 
+// Shared secure-write helpers. Declared here (rather than in `mod.rs`) so the
+// new module is compiled + reachable as `super::config::secure_write` from
+// `hooks.rs` and `rules.rs` without modifying `mod.rs`.
+#[path = "secure_write.rs"]
+pub mod secure_write;
+
+use secure_write::{atomic_write_secret, erebyx_command};
+
 /// Write MCP server configuration for a specific client.
 /// Returns the path where config was written.
 pub fn write_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
-    // Ensure parent directory exists
+    // Ensure parent directory exists (0o700 on Unix when we create it).
     if let Some(parent) = client.config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        secure_write::ensure_dir_secure(parent)?;
     }
 
     match client.kind {
@@ -46,20 +53,6 @@ fn erebyx_server_entry(api_key: &str, api_url: &str) -> Value {
             "EREBYX_INSTANCE_ID": "default"
         }
     })
-}
-
-/// Resolve the `erebyx` binary path that AI clients should launch.
-///
-/// Prefers the absolute path of the currently-running binary so the launched
-/// MCP server is always the same version the user just ran `erebyx setup`
-/// from. Falls back to the bare command name if the current exe path can't
-/// be resolved (the client will then rely on `$PATH`).
-fn erebyx_command() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "erebyx".to_string())
 }
 
 /// Extract a mutable JSON object reference, returning a descriptive error
@@ -262,26 +255,19 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     };
 
     if let Some(parent) = client.config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        secure_write::ensure_dir_secure(parent)?;
     }
-    std::fs::write(&client.config_path, new_content)
-        .with_context(|| format!("Failed to write {}", client.config_path.display()))?;
 
-    // P0 (brutal-review wave-2): apply 0600 perms on Unix — the JSON
-    // writer does this via `write_json`; YAML writer was silently
-    // shipping world-readable. Real credential-leak surface for users
-    // on shared hosts.
-    #[cfg(unix)]
+    // Atomic + owner-only write. Previously a bare `fs::write` + post-hoc
+    // chmod, which (a) left a window where the key-bearing YAML was
+    // world-readable, and (b) could truncate the user's whole Continue
+    // config on a crash. `atomic_write_secret` closes both.
+    atomic_write_secret(&client.config_path, new_content.as_bytes())?;
+
+    // Windows DACL hardening (fail-soft) — see `write_json` for rationale.
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&client.config_path, perms).with_context(|| {
-            format!(
-                "Failed to set permissions on {}",
-                client.config_path.display()
-            )
-        })?;
+        secure_write::harden_windows_acl(&client.config_path);
     }
 
     Ok(client.config_path.clone())
@@ -456,7 +442,7 @@ fn read_json_or_empty(path: &PathBuf) -> Result<Value> {
 /// - If the matching ancestor IS `$HOME`, treat it as the dotfiles-
 ///   bare-repo case and ALLOW unless the user explicitly opted into
 ///   refusing it via `EREBYX_REFUSE_HOME_DOTFILES=1`.
-fn is_within_git_tree(path: &std::path::Path) -> bool {
+pub(super) fn is_within_git_tree(path: &std::path::Path) -> bool {
     // Resolve symlinks. The synced-dotfiles footgun is precisely the
     // case where the literal path doesn't contain `.git` but the
     // resolved path does.
@@ -503,7 +489,7 @@ fn is_within_git_tree(path: &std::path::Path) -> bool {
 /// treated `EREBYX_ALLOW_GIT_TREE_CONFIG=0` as a bypass — opposite of
 /// what the user expects. This helper enforces the strict allowlist
 /// across all CLI env-var toggles.
-fn env_flag_truthy(name: &str) -> bool {
+pub(super) fn env_flag_truthy(name: &str) -> bool {
     std::env::var(name)
         .ok()
         .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
@@ -522,7 +508,7 @@ fn env_flag_truthy(name: &str) -> bool {
 /// `EREBYX_ALLOW_GIT_TREE_CONFIG=1` override. Many users sync
 /// `~/.claude/` and similar dotfiles to public repos; silently writing
 /// an API key into those would leak credentials at next `git add .`.
-fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
+fn write_json(path: &std::path::Path, value: &Value) -> Result<()> {
     // Refuse to write a credential-bearing config inside a git working
     // tree unless the user has explicitly opted in. The truthiness
     // check uses the {"1","true","yes"} allowlist so that
@@ -539,46 +525,24 @@ fn write_json(path: &PathBuf, value: &Value) -> Result<()> {
     }
 
     let content = serde_json::to_string_pretty(value).context("Failed to serialize JSON")?;
-    std::fs::write(path, &content)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
 
-    // Restrict permissions to owner-only read/write (config files contain API keys)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
-    }
-    // P0-4 (2026-05-27): Windows has no portable in-process way to set a
-    // user-only DACL without an extra dependency. Document the gap so a
-    // Windows operator running `erebyx setup` sees the warning and can
-    // tighten permissions out-of-band. The file lands at %USERPROFILE%
-    // by default, which is already user-profile-scoped on a single-user
-    // box — the risk is multi-user Windows hosts and roaming profiles.
-    // A future v0.1.2 will wire `windows-acl` to close this.
-    //
-    // P1-B (brutal-review POSTFIX_CLI): warn once per process, not once
-    // per write_json call. `erebyx setup` typically writes one config
-    // per detected client (3-6 files on a developer box); a single
-    // warning per `setup` invocation is enough signal.
+    // Atomic + owner-only write. `atomic_write_secret` writes to a sibling
+    // temp file, chmods it 0o600 on Unix BEFORE the rename, then atomically
+    // renames over the target — so a crash mid-write can never truncate the
+    // customer's whole client config, and the key-bearing file is never
+    // world-readable even transiently.
+    atomic_write_secret(path, content.as_bytes())?;
+
+    // P0-4 (2026-05-27) → v0.1.2: tighten the Windows DACL on the
+    // key-bearing file. `harden_windows_acl` shells to `icacls` with args as
+    // a vec (no shell parsing) and FAILS SOFT to the previous warn-only
+    // behavior if icacls is missing / errors, so the downside is never worse
+    // than before. HIGHEST runtime risk in the v0.1.2 set — see the helper's
+    // docstring; MUST be tested on a multi-user / domain-joined Windows box
+    // before tagging.
     #[cfg(windows)]
     {
-        use std::sync::Once;
-        static WINDOWS_ACL_WARN: Once = Once::new();
-        WINDOWS_ACL_WARN.call_once(|| {
-            eprintln!(
-                "  ⚠ Windows: file permissions cannot be auto-restricted on this platform.\n\
-                 \n\
-                 Confirm %USERPROFILE% is not world-readable. To tighten ACLs on each\n\
-                 written config, run:\n\
-                 \n\
-                     icacls \"<path>\" /inheritance:r ^\n\
-                         /grant:r \"%USERNAME%:F\" \"SYSTEM:F\" \"Administrators:F\"\n\
-                 \n\
-                 See SECURITY.md → \"API-key file handling\" for the full guidance."
-            );
-        });
+        secure_write::harden_windows_acl(path);
     }
 
     Ok(())

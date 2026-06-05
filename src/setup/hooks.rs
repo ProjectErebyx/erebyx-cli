@@ -11,6 +11,7 @@
 
 use anyhow::{bail, Context, Result};
 
+use super::config::secure_write::{atomic_write_secret, ensure_dir_secure, erebyx_command};
 use super::detect::AiClient;
 use crate::client::is_safe_url;
 
@@ -56,6 +57,13 @@ fn shell_single_quote(value: &str) -> String {
 fn hook_script(api_url: &str) -> String {
     // Single-quoted literal — already includes the surrounding quotes.
     let quoted_default = shell_single_quote(api_url);
+    // Absolute, symlink-resolved path of the running binary, single-quoted so
+    // a path containing spaces or shell metacharacters lands as inert data.
+    // GUI-launched Claude Code often runs with a minimal $PATH that doesn't
+    // include the install dir, so a bare `erebyx` would silently fail to
+    // exec — the absolute path is what makes the hook fire from a desktop
+    // client.
+    let quoted_exe = shell_single_quote(&erebyx_command());
     format!(
         r#"#!/usr/bin/env bash
 # EREBYX Memory Injector — Claude Code UserPromptSubmit Hook
@@ -79,10 +87,12 @@ if [ -z "${{EREBYX_API_URL}}" ]; then
     export EREBYX_API_URL={quoted_default}
 fi
 
-# Single native call. If it fails for any reason, emit {{}} and exit clean.
-exec erebyx hook-inject 2>/dev/null || printf '%s' '{{}}'
+# Single native call via the absolute binary path (single-quoted literal).
+# If it fails for any reason, emit {{}} and exit clean.
+exec {quoted_exe} hook-inject 2>/dev/null || printf '%s' '{{}}'
 "#,
         quoted_default = quoted_default,
+        quoted_exe = quoted_exe,
     )
 }
 
@@ -117,9 +127,18 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
     // the two registrations so SessionStart pre-injection still works
     // on Windows is a 6-line change vs leaving Windows users without
     // claude-mem-equivalent pre-injection.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = api_url; // unused on this branch
+    // The UserPromptSubmit bash-hook path is Unix-only; Windows punts cleanly
+    // after registering the (cross-platform) SessionStart hook. We branch with
+    // a RUNTIME `cfg!` (not `#[cfg]`): #[cfg] either left the Unix path
+    // compiled-but-unreachable on Windows (unreachable_code) OR — if we cfg'd
+    // the Unix path out — orphaned its helpers (hook_script, ensure_dir_secure,
+    // register_hook_in_settings, …) into dead_code on Windows. A runtime branch
+    // keeps the whole Unix path COMPILED on every target (helpers stay used) and
+    // can't trip unreachable_code, while still skipping the .sh write on Windows
+    // at run time. The Unix path is pure-cross-platform Rust except the inner
+    // #[cfg(unix)] perms block, so it builds fine on Windows even though it
+    // never executes there.
+    if cfg!(target_os = "windows") {
         eprintln!(
             "  ⚠ Claude Code UserPromptSubmit hook: Windows support is not \
              yet implemented (bash script). SessionStart pre-injection is \
@@ -131,19 +150,19 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
         return Ok(());
     }
 
-    // Native hook handler — no python3 or external interpreter required.
-
-    // Write the hook script
+    // Native (Unix) hook handler — no python3 or external interpreter required.
+    // `ensure_dir_secure` creates the hooks dir and, when WE create it, tightens
+    // it to 0o700 on Unix (stat-first so a pre-existing dir keeps user perms).
     let hooks_dir = client.home_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir)
-        .with_context(|| format!("Failed to create hooks directory: {}", hooks_dir.display()))?;
+    ensure_dir_secure(&hooks_dir)?;
 
     let script_path = hooks_dir.join("erebyx-memory-injector.sh");
     let script_content = hook_script(api_url);
     std::fs::write(&script_path, &script_content)
         .with_context(|| format!("Failed to write hook script: {}", script_path.display()))?;
 
-    // Set owner-only execute permissions (0o700) on the hook script
+    // Owner-only read/write/execute (0o700) on the hook script — not a
+    // credential file, but executed on every prompt, so owner-only is right.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -152,7 +171,7 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
             .with_context(|| format!("Failed to set permissions on {}", script_path.display()))?;
     }
 
-    // Register hooks in Claude Code settings
+    // Register hooks in Claude Code settings.
     register_hook_in_settings(client, &script_path)?;
     register_session_start_hook(client)?;
 
@@ -204,43 +223,99 @@ fn register_session_start_hook(client: &AiClient) -> Result<()> {
         .entry("SessionStart")
         .or_insert_with(|| serde_json::json!([]));
 
-    // Hook command invokes `erebyx hook-session-start`. Marked with
-    // `_erebyx_managed: true` so the same retention logic that protects
-    // user-authored UserPromptSubmit hooks also protects user-authored
-    // SessionStart hooks.
-    let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": "erebyx hook-session-start",
+    // Claude Code REQUIRES a matcher-GROUP wrapper for SessionStart entries
+    // and iterates `SessionStart[].hooks[]`. A flat `{type,command}` pushed
+    // directly into the array (what v0.1.0/v0.1.1 did) is NEVER executed —
+    // the hook silently never fired. The correct shape is:
+    //   [{ "hooks": [ {type, command} ], "_erebyx_managed": true }]
+    //
+    // We OMIT the `matcher` field deliberately. For SessionStart, the matcher
+    // selects the SOURCE (`startup` | `resume` | `clear` | `compact`); pinning
+    // `"startup"` would fire ONLY on a cold CLI start and NEVER on resume,
+    // /clear, or post-compaction — which are precisely the moments continuity
+    // matters most (re-opening a conversation, re-hydrating after a compact).
+    // No matcher = fires on EVERY session start, which is the whole point of
+    // restore-identity-on-wake. The `_erebyx_managed` marker lives on the GROUP
+    // (the level CC iterates), not the inner handler, so retention can find it.
+    //
+    // The command uses the absolute, symlink-resolved binary path (not bare
+    // `erebyx`) so GUI-launched Claude Code with a minimal $PATH still fires.
+    let hook_command = format!("{} hook-session-start", erebyx_command());
+    let hook_group = serde_json::json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": hook_command
+            }
+        ],
         "_erebyx_managed": true
     });
 
     if let Some(arr) = session_start.as_array_mut() {
+        // Remove our managed groups AND legacy flat entries (upgrade path:
+        // cleans up the broken v0.1.0/v0.1.1 flat objects), then push the one
+        // correct nested group.
         arr.retain(|h| !should_remove_session_start_entry(h));
-        arr.push(hook_entry);
+        arr.push(hook_group);
     }
 
     let content =
         serde_json::to_string_pretty(&config).context("Failed to serialize settings JSON")?;
-    std::fs::write(settings_path, content)
-        .with_context(|| format!("Failed to write {}", settings_path.display()))?;
+    // Atomic write: settings.json holds the user's ENTIRE Claude Code config
+    // (other MCP servers, hooks, permissions). A crash mid-write would
+    // corrupt all of it — `atomic_write_secret` makes the replace atomic.
+    atomic_write_secret(settings_path, content.as_bytes())?;
 
     Ok(())
 }
 
-/// Pure predicate: should this existing SessionStart hook entry be
-/// REMOVED before registering our managed entry? Mirrors
-/// `should_remove_hook_entry` but matches the SessionStart-specific
-/// command shape (`erebyx hook-session-start`).
+/// Pure predicate: should this existing SessionStart array element be
+/// REMOVED before registering our managed matcher-group?
+///
+/// Post-[1], our entry is a matcher-GROUP `{matcher, hooks:[…],
+/// _erebyx_managed:true}` and the marker lives on the group. This predicate
+/// must therefore match three forms:
+///
+///   1. **Group with our marker** — `_erebyx_managed: true` at the top level
+///      of the array element (current canon).
+///   2. **Group whose `hooks[]` contains our command** — any handler whose
+///      `command` ends with `erebyx hook-session-start` (back-compat for a
+///      marker-less group, and the descend [2] requires).
+///   3. **Legacy FLAT entry** — a top-level `{type, command}` where `command`
+///      ends with `erebyx hook-session-start`. This is the v0.1.0/v0.1.1
+///      broken shape; matching it here is the upgrade path that replaces the
+///      dead flat entry with the correct nested group.
+///
+/// Anything else (user-authored groups/hooks) stays untouched.
 fn should_remove_session_start_entry(entry: &serde_json::Value) -> bool {
-    let is_managed = entry
+    // 1. Marker on the group (or a legacy flat entry that carried it).
+    if entry
         .get("_erebyx_managed")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if is_managed {
+        .unwrap_or(false)
+    {
         return true;
     }
-    let cmd = entry.get("command").and_then(|c| c.as_str()).unwrap_or("");
-    cmd == "erebyx hook-session-start"
+    // 2. Group: descend into hooks[] and match our command.
+    if let Some(handlers) = entry.get("hooks").and_then(|h| h.as_array()) {
+        if handlers.iter().any(is_session_start_command) {
+            return true;
+        }
+    }
+    // 3. Legacy flat entry: command at the top level.
+    is_session_start_command(entry)
+}
+
+/// True if a single hook-handler object's `command` is the erebyx
+/// session-start invocation. Tolerant of the absolute-path form
+/// (`/abs/path/erebyx hook-session-start`) as well as the legacy bare form
+/// (`erebyx hook-session-start`).
+fn is_session_start_command(handler: &serde_json::Value) -> bool {
+    let cmd = handler
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    cmd == "erebyx hook-session-start" || cmd.ends_with(" hook-session-start")
 }
 
 /// Validate a JSON value is an object, returning a descriptive error if not.
@@ -292,32 +367,42 @@ fn register_hook_in_settings(client: &AiClient, script_path: &std::path::Path) -
         .entry("UserPromptSubmit")
         .or_insert_with(|| serde_json::json!([]));
 
-    // Build and insert the hook entry with an explicit managed-marker so
-    // future re-runs only touch our own entries — not user-authored
-    // adjacent automation. P1-5 (2026-05-27): the prior substring filter
-    // (`c.contains("erebyx")`) would wipe ANY hook whose command mentioned
-    // erebyx (e.g. `~/bin/erebyx-archive-export`, custom helpers under
-    // `~/scripts/my-erebyx-extras.sh`). Customers writing their own
-    // erebyx-adjacent automation would lose it silently on the next
-    // `erebyx setup` run.
-    let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": script_path.to_string_lossy(),
+    // Claude Code REQUIRES a matcher-GROUP wrapper for UserPromptSubmit
+    // entries and iterates `UserPromptSubmit[].hooks[]`. A flat
+    // `{type,command}` pushed directly into the array (what v0.1.0/v0.1.1
+    // did) is NEVER executed — the feature silently never fired. The correct
+    // shape is:
+    //   [{ "hooks": [ {type, command} ], "_erebyx_managed": true }]
+    // (UserPromptSubmit takes no `matcher` field — it fires on every prompt.)
+    // The `_erebyx_managed` marker lives on the GROUP (the level CC
+    // iterates), so retention can find it.
+    //
+    // P1-5 (2026-05-27): retention is exact-form, never a substring match on
+    // "erebyx", so user-authored erebyx-adjacent automation
+    // (`~/bin/erebyx-archive-export`, etc.) is preserved.
+    let hook_group = serde_json::json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": script_path.to_string_lossy()
+            }
+        ],
         "_erebyx_managed": true
     });
 
     if let Some(arr) = user_prompt_hooks.as_array_mut() {
-        // Retention precision via the extracted `should_remove_hook_entry`
-        // predicate. See its docstring (and unit tests at the bottom of
-        // this file) for the three-way match semantics.
+        // Remove our managed groups AND legacy flat entries (upgrade path:
+        // cleans up the broken v0.1.0/v0.1.1 flat objects) via the extracted
+        // `should_remove_hook_entry` predicate, then push the one correct
+        // nested group.
         arr.retain(|h| !should_remove_hook_entry(h));
-        arr.push(hook_entry);
+        arr.push(hook_group);
     }
 
     let content =
         serde_json::to_string_pretty(&config).context("Failed to serialize settings JSON")?;
-    std::fs::write(settings_path, content)
-        .with_context(|| format!("Failed to write {}", settings_path.display()))?;
+    // Atomic write — see `register_session_start_hook`.
+    atomic_write_secret(settings_path, content.as_bytes())?;
 
     Ok(())
 }
@@ -334,37 +419,360 @@ fn value_type_name(v: &serde_json::Value) -> &'static str {
     }
 }
 
-/// Pure predicate: should this existing hook entry be REMOVED before
-/// registering our managed entry?
+/// Pure predicate: should this existing UserPromptSubmit array element be
+/// REMOVED before registering our managed matcher-group?
 ///
-/// Extracted from `register_hook_in_settings` so the precision contract
-/// can be tested directly. P1-5 (brutal-review POSTFIX_CLI CC-1) said
-/// "hook retention filter is a pure-function pass over a JSON array.
-/// Testable. Add tests."
+/// Extracted from `register_hook_in_settings` so the precision contract can
+/// be tested directly. P1-5 (brutal-review POSTFIX_CLI CC-1) said "hook
+/// retention filter is a pure-function pass over a JSON array. Testable. Add
+/// tests."
 ///
-/// Three-way match:
-///   1. Explicit `_erebyx_managed: true` marker (current canon).
-///   2. Exact-path match for `*/erebyx-memory-injector.sh` (back-compat
-///      with v0.1.0 installs that lack the flag).
-///   3. Exact `erebyx hook-inject` command (legacy invocation).
+/// Post-[1], our entry is a matcher-GROUP `{hooks:[…], _erebyx_managed:true}`
+/// and the marker lives on the group. This predicate matches:
 ///
-/// Anything else stays untouched.
+///   1. **Group with our marker** — `_erebyx_managed: true` at the top level
+///      of the array element (current canon).
+///   2. **Group whose `hooks[]` contains our command** — any handler whose
+///      `command` is our injector script or the legacy `erebyx hook-inject`
+///      (the descend [2] requires; back-compat for a marker-less group).
+///   3. **Legacy FLAT entry** — a top-level `{type, command}` matching the
+///      injector script path or `erebyx hook-inject`. This is the
+///      v0.1.0/v0.1.1 broken shape; matching it here is the upgrade path that
+///      replaces the dead flat entry with the correct nested group.
+///
+/// Exact-form only — never a substring match on "erebyx" — so user-authored
+/// erebyx-adjacent automation is preserved.
 fn should_remove_hook_entry(entry: &serde_json::Value) -> bool {
-    let is_managed = entry
+    // 1. Marker on the group (or a legacy flat entry that carried it).
+    if entry
         .get("_erebyx_managed")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if is_managed {
+        .unwrap_or(false)
+    {
         return true;
     }
-    let cmd = entry.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    // 2. Group: descend into hooks[] and match our command.
+    if let Some(handlers) = entry.get("hooks").and_then(|h| h.as_array()) {
+        if handlers.iter().any(is_inject_command) {
+            return true;
+        }
+    }
+    // 3. Legacy flat entry: command at the top level.
+    is_inject_command(entry)
+}
+
+/// True if a single hook-handler object's `command` is the erebyx
+/// memory-injector invocation: the generated `*/erebyx-memory-injector.sh`
+/// script, or the legacy bare `erebyx hook-inject` command.
+fn is_inject_command(handler: &serde_json::Value) -> bool {
+    let cmd = handler
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
     cmd.ends_with("erebyx-memory-injector.sh") || cmd == "erebyx hook-inject"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::setup::detect::ClientKind;
     use serde_json::json;
+    use tempfile::TempDir;
+
+    /// Build a Claude-Code-shaped AiClient pointing at a tempdir so the
+    /// settings.json writers can be exercised end-to-end.
+    fn test_client(dir: &std::path::Path) -> AiClient {
+        AiClient {
+            kind: ClientKind::ClaudeCode,
+            name: "Test Claude Code",
+            config_path: dir.join("settings.json"),
+            rules_path: dir.join("rules").join("erebyx-memory.md"),
+            config_exists: false,
+            home_dir: dir.to_path_buf(),
+        }
+    }
+
+    // -------------------------------------------------------------
+    // [1] HOOK NESTING — the written JSON must be a matcher-group with
+    //     .hooks[] handlers, NOT a flat entry. (The headline fix.)
+    // -------------------------------------------------------------
+
+    /// UserPromptSubmit: the written array element is a GROUP carrying
+    /// `_erebyx_managed` + a `hooks[]` of `{type, command}` handlers. A flat
+    /// `{type,command}` element (the v0.1.0/v0.1.1 bug) is never executed by
+    /// Claude Code, so this pins the nesting precisely.
+    #[test]
+    fn user_prompt_hook_is_written_as_matcher_group() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+        let script_path = td.path().join("hooks").join("erebyx-memory-injector.sh");
+
+        register_hook_in_settings(&client, &script_path).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+        let arr = written["hooks"]["UserPromptSubmit"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "exactly one UserPromptSubmit entry");
+
+        let group = &arr[0];
+        // Marker is on the GROUP (the level CC iterates).
+        assert_eq!(
+            group["_erebyx_managed"].as_bool(),
+            Some(true),
+            "_erebyx_managed must be on the matcher-group, not the handler"
+        );
+        // UserPromptSubmit groups carry no matcher field (fires every prompt).
+        // The handler lives under .hooks[].
+        let handlers = group["hooks"].as_array().expect("group must have .hooks[]");
+        assert_eq!(handlers.len(), 1, "one handler in the group");
+        assert_eq!(handlers[0]["type"].as_str(), Some("command"));
+        assert_eq!(
+            handlers[0]["command"].as_str(),
+            Some(script_path.to_string_lossy().as_ref()),
+            "handler command is the injector script path"
+        );
+        // The handler itself must NOT carry the managed marker.
+        assert!(
+            handlers[0].get("_erebyx_managed").is_none(),
+            "marker belongs on the group, not the inner handler"
+        );
+    }
+
+    /// SessionStart: the written array element is a GROUP with NO `matcher`
+    /// (match-all → fires on startup/resume/clear/compact), `_erebyx_managed`,
+    /// and a `hooks[]` whose handler command is the ABSOLUTE-path session-start
+    /// invocation. A pinned `matcher:"startup"` would skip resume/clear/compact
+    /// — the continuity-critical wakes — so the group MUST omit the matcher.
+    #[test]
+    fn session_start_hook_is_written_as_matcher_group_match_all() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+
+        register_session_start_hook(&client).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+        let arr = written["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "exactly one SessionStart entry");
+
+        let group = &arr[0];
+        assert!(
+            group.get("matcher").is_none(),
+            "SessionStart group must OMIT the matcher (match-all over startup/resume/clear/compact), got {:?}",
+            group.get("matcher")
+        );
+        assert_eq!(group["_erebyx_managed"].as_bool(), Some(true));
+        let handlers = group["hooks"].as_array().expect("group must have .hooks[]");
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0]["type"].as_str(), Some("command"));
+        let cmd = handlers[0]["command"].as_str().unwrap();
+        assert!(
+            cmd.ends_with("hook-session-start"),
+            "command must invoke hook-session-start, got {cmd:?}"
+        );
+        // [3]: absolute exe path — under cargo test current_exe resolves, so
+        // the command must be an absolute path, NOT bare `erebyx`.
+        assert!(
+            cmd != "erebyx hook-session-start",
+            "command must use the absolute binary path, not bare `erebyx`"
+        );
+    }
+
+    // -------------------------------------------------------------
+    // [2] DEDUP DESCEND + LEGACY CLEANUP
+    // -------------------------------------------------------------
+
+    /// Registering twice leaves EXACTLY ONE erebyx matcher-group in each
+    /// array (idempotency through the new group-aware retention).
+    #[test]
+    fn register_twice_leaves_exactly_one_group_each() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+        let script_path = td.path().join("hooks").join("erebyx-memory-injector.sh");
+
+        register_hook_in_settings(&client, &script_path).unwrap();
+        register_session_start_hook(&client).unwrap();
+        // Second run (simulating a re-`erebyx setup`).
+        register_hook_in_settings(&client, &script_path).unwrap();
+        register_session_start_hook(&client).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+        assert_eq!(
+            written["hooks"]["UserPromptSubmit"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "UserPromptSubmit must not accumulate duplicate groups"
+        );
+        assert_eq!(
+            written["hooks"]["SessionStart"].as_array().unwrap().len(),
+            1,
+            "SessionStart must not accumulate duplicate groups"
+        );
+    }
+
+    /// A pre-seeded OLD FLAT entry (the v0.1.0/v0.1.1 broken shape) gets
+    /// removed and replaced with the correct nested group on the next run —
+    /// the upgrade path. User-authored hooks alongside survive.
+    #[test]
+    fn old_flat_entries_are_cleaned_up_and_replaced_with_nested_groups() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+        let script_path = td.path().join("hooks").join("erebyx-memory-injector.sh");
+
+        // Seed settings.json with the OLD broken flat entries + a
+        // user-authored hook that must be preserved.
+        let seed = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    // v0.1.1 flat (dead) entry — must be removed.
+                    {"type": "command", "command": script_path.to_string_lossy(), "_erebyx_managed": true},
+                    // user automation that merely mentions erebyx — must survive.
+                    {"type": "command", "command": "/Users/me/bin/erebyx-archive-export"}
+                ],
+                "SessionStart": [
+                    // v0.1.1 flat (dead) entry — must be removed.
+                    {"type": "command", "command": "erebyx hook-session-start", "_erebyx_managed": true},
+                    // user automation — must survive.
+                    {"hooks": [{"type": "command", "command": "echo hi"}]}
+                ]
+            }
+        });
+        std::fs::write(
+            &client.config_path,
+            serde_json::to_string_pretty(&seed).unwrap(),
+        )
+        .unwrap();
+
+        register_hook_in_settings(&client, &script_path).unwrap();
+        register_session_start_hook(&client).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+
+        // --- UserPromptSubmit ---
+        let ups = written["hooks"]["UserPromptSubmit"].as_array().unwrap();
+        // user automation + exactly one new nested erebyx group = 2 entries.
+        assert_eq!(
+            ups.len(),
+            2,
+            "old flat + new group must not coexist: {ups:#?}"
+        );
+        // The user automation survived.
+        assert!(
+            ups.iter()
+                .any(|e| e["command"].as_str() == Some("/Users/me/bin/erebyx-archive-export")),
+            "user-authored erebyx-adjacent hook must be preserved"
+        );
+        // Exactly one nested erebyx group (has .hooks[] with our command).
+        let nested_erebyx = ups
+            .iter()
+            .filter(|e| {
+                e.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| hs.iter().any(is_inject_command))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(nested_erebyx, 1, "exactly one nested erebyx group survives");
+        // No FLAT erebyx entry remains.
+        assert!(
+            !ups.iter()
+                .any(|e| e.get("hooks").is_none() && is_inject_command(e)),
+            "the old flat erebyx entry must be gone"
+        );
+
+        // --- SessionStart ---
+        let ss = written["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(
+            ss.len(),
+            2,
+            "old flat + new group must not coexist: {ss:#?}"
+        );
+        // The user automation (echo hi group) survived.
+        assert!(
+            ss.iter().any(|e| {
+                e.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| hs.iter().any(|h| h["command"].as_str() == Some("echo hi")))
+                    .unwrap_or(false)
+            }),
+            "user-authored SessionStart group must be preserved"
+        );
+        let nested_erebyx = ss
+            .iter()
+            .filter(|e| {
+                e.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| hs.iter().any(is_session_start_command))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            nested_erebyx, 1,
+            "exactly one nested erebyx session-start group survives"
+        );
+        assert!(
+            !ss.iter()
+                .any(|e| e.get("hooks").is_none() && is_session_start_command(e)),
+            "the old flat erebyx session-start entry must be gone"
+        );
+    }
+
+    /// Group-aware retention without a marker: a matcher-group whose hooks[]
+    /// contains our command is removed even if it lacks `_erebyx_managed`.
+    #[test]
+    fn group_without_marker_but_with_our_command_is_removed() {
+        let script_group = json!({
+            "hooks": [{"type": "command", "command": "/x/erebyx-memory-injector.sh"}]
+        });
+        assert!(should_remove_hook_entry(&script_group));
+
+        let ss_group = json!({
+            "matcher": "startup",
+            "hooks": [{"type": "command", "command": "/abs/erebyx hook-session-start"}]
+        });
+        assert!(should_remove_session_start_entry(&ss_group));
+    }
+
+    /// A user-authored matcher-group whose hooks don't reference erebyx must
+    /// be preserved by both predicates.
+    #[test]
+    fn user_authored_group_is_preserved() {
+        let group = json!({
+            "hooks": [{"type": "command", "command": "/Users/me/bin/erebyx-archive-export"}]
+        });
+        assert!(!should_remove_hook_entry(&group));
+        let ss_group = json!({
+            "matcher": "startup",
+            "hooks": [{"type": "command", "command": "my-own-startup"}]
+        });
+        assert!(!should_remove_session_start_entry(&ss_group));
+    }
+
+    // -------------------------------------------------------------
+    // [3] ABSOLUTE EXE PATH in the generated script
+    // -------------------------------------------------------------
+
+    /// The generated script's exec line uses the absolute, single-quoted
+    /// binary path — never a bare `exec erebyx`. Under cargo test
+    /// `current_exe` resolves, so the path is absolute.
+    #[test]
+    fn hook_script_exec_line_uses_absolute_quoted_path() {
+        let script = hook_script("https://core.erebyx.com");
+        let expected_exe = shell_single_quote(&erebyx_command());
+        assert!(
+            script.contains(&format!("exec {expected_exe} hook-inject")),
+            "exec line must use the single-quoted absolute exe path. Script:\n{script}"
+        );
+        // The old bare form must be gone.
+        assert!(
+            !script.contains("exec erebyx hook-inject"),
+            "bare `exec erebyx hook-inject` (relies on $PATH) must be gone. Script:\n{script}"
+        );
+    }
 
     // -------------------------------------------------------------
     // should_remove_hook_entry — retention precision (P1-5)
