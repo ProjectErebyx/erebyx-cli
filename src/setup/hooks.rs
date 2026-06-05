@@ -127,9 +127,13 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
     // the two registrations so SessionStart pre-injection still works
     // on Windows is a 6-line change vs leaving Windows users without
     // claude-mem-equivalent pre-injection.
+    // Platform split as two cfg-gated TAIL blocks (exactly one compiles per
+    // target) — NOT a windows early-`return` followed by unconditional unix
+    // code, which compiles the unix path as unreachable on Windows (clippy
+    // -D warnings catches it on windows-latest).
     #[cfg(target_os = "windows")]
     {
-        let _ = api_url; // unused on this branch
+        let _ = api_url; // the bash-script path is not compiled on this target
         eprintln!(
             "  ⚠ Claude Code UserPromptSubmit hook: Windows support is not \
              yet implemented (bash script). SessionStart pre-injection is \
@@ -138,38 +142,42 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
              PowerShell variant."
         );
         register_session_start_hook(client)?;
-        return Ok(());
+        Ok(())
     }
 
-    // Native hook handler — no python3 or external interpreter required.
-
-    // Write the hook script. `ensure_dir_secure` creates the hooks dir and,
-    // when WE create it, tightens it to 0o700 on Unix (stat-first so a
-    // pre-existing dir keeps the user's own perms).
-    let hooks_dir = client.home_dir.join("hooks");
-    ensure_dir_secure(&hooks_dir)?;
-
-    let script_path = hooks_dir.join("erebyx-memory-injector.sh");
-    let script_content = hook_script(api_url);
-    std::fs::write(&script_path, &script_content)
-        .with_context(|| format!("Failed to write hook script: {}", script_path.display()))?;
-
-    // Set owner-only read/write/execute permissions (0o700) on the hook
-    // script. The script is not a credential file, but it's executed on every
-    // prompt, so owner-only is the right posture.
-    #[cfg(unix)]
+    #[cfg(not(target_os = "windows"))]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(&script_path, perms)
-            .with_context(|| format!("Failed to set permissions on {}", script_path.display()))?;
+        // Native hook handler — no python3 or external interpreter required.
+
+        // Write the hook script. `ensure_dir_secure` creates the hooks dir and,
+        // when WE create it, tightens it to 0o700 on Unix (stat-first so a
+        // pre-existing dir keeps the user's own perms).
+        let hooks_dir = client.home_dir.join("hooks");
+        ensure_dir_secure(&hooks_dir)?;
+
+        let script_path = hooks_dir.join("erebyx-memory-injector.sh");
+        let script_content = hook_script(api_url);
+        std::fs::write(&script_path, &script_content)
+            .with_context(|| format!("Failed to write hook script: {}", script_path.display()))?;
+
+        // Set owner-only read/write/execute permissions (0o700) on the hook
+        // script. The script is not a credential file, but it's executed on
+        // every prompt, so owner-only is the right posture.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(&script_path, perms).with_context(|| {
+                format!("Failed to set permissions on {}", script_path.display())
+            })?;
+        }
+
+        // Register hooks in Claude Code settings
+        register_hook_in_settings(client, &script_path)?;
+        register_session_start_hook(client)?;
+
+        Ok(())
     }
-
-    // Register hooks in Claude Code settings
-    register_hook_in_settings(client, &script_path)?;
-    register_session_start_hook(client)?;
-
-    Ok(())
 }
 
 /// Native SessionStart hook for Claude Code — pre-injects identity +
