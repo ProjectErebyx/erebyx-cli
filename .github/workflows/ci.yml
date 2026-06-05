@@ -91,7 +91,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (pinned)
+      - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry + target
@@ -108,6 +108,36 @@ jobs:
       - name: cargo test
         run: cargo test --all-targets --locked --verbose
 
+  # CLI v0.1.2 fix [F10]: guard the declared MSRV. Cargo.toml pins
+  # `rust-version = "1.75"`, but every other job runs `@stable`, so a stray
+  # use of a newer-than-1.75 std/lang feature would compile green in CI yet
+  # break `cargo install` for a user on the documented minimum toolchain.
+  # Build (not test — dev-deps may legitimately need a newer toolchain) on
+  # exactly 1.75 with `--locked` to catch that drift.
+  msrv:
+    name: MSRV build (1.75)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (1.75 — declared MSRV)
+        uses: dtolnay/rust-toolchain@1.75
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-
+
+      - name: cargo build --locked (MSRV)
+        run: cargo build --locked --verbose
+
   # CLI v0.1.2 fix [12]: advisory + license + bans gate. Blocks merges that
   # pull a dependency with a known RUSTSEC advisory, a disallowed license, or
   # a banned/duplicate crate. The release publish job `needs:` the equivalent
@@ -119,15 +149,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (pinned)
+      - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
 
       - name: cargo audit (RUSTSEC advisories)
-        uses: rustsec/audit-check@v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: cargo deny check (advisories + licenses + bans + sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check

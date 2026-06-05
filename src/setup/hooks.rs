@@ -472,6 +472,46 @@ fn is_inject_command(handler: &serde_json::Value) -> bool {
     cmd.ends_with("erebyx-memory-injector.sh") || cmd == "erebyx hook-inject"
 }
 
+/// Whether `setup` actually wired BOTH Claude Code hook groups into a parsed
+/// `settings.json` — a managed `SessionStart` group AND a managed
+/// `UserPromptSubmit` group. `doctor` calls this so it can detect the common
+/// half-installed state where the injector script exists on disk but the
+/// settings.json was never updated (or was reverted by an unrelated edit),
+/// which silently disables memory injection.
+///
+/// Reuses the same `should_remove_*` managed-entry predicates that `setup`
+/// uses to find/replace its own groups, so doctor and setup can never drift
+/// on what "our group" means.
+pub(crate) struct HookRegistration {
+    pub session_start: bool,
+    pub user_prompt_submit: bool,
+}
+
+impl HookRegistration {
+    /// True only when BOTH managed groups are present.
+    pub(crate) fn fully_wired(&self) -> bool {
+        self.session_start && self.user_prompt_submit
+    }
+}
+
+/// Inspect a parsed Claude Code `settings.json` value for our two managed
+/// hook groups. A missing `hooks` object, a non-array entry, or an absent
+/// key all read as "not registered" for that group (never panics).
+pub(crate) fn hook_registration_status(settings: &serde_json::Value) -> HookRegistration {
+    let group_present = |key: &str, pred: fn(&serde_json::Value) -> bool| -> bool {
+        settings
+            .get("hooks")
+            .and_then(|h| h.get(key))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().any(pred))
+            .unwrap_or(false)
+    };
+    HookRegistration {
+        session_start: group_present("SessionStart", should_remove_session_start_entry),
+        user_prompt_submit: group_present("UserPromptSubmit", should_remove_hook_entry),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,5 +1038,76 @@ mod tests {
             !script.contains("${EREBYX_API_URL:-https://evil}"),
             "payload must NOT appear in an unquoted parameter-expansion default. Script:\n{script}"
         );
+    }
+
+    // -------------------------------------------------------------
+    // [F4] hook_registration_status — doctor's registration probe.
+    // -------------------------------------------------------------
+
+    /// A settings.json that `setup` fully wired (both register fns run) must
+    /// read back as `fully_wired()`.
+    #[test]
+    fn registration_status_reports_fully_wired_after_setup() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+        let script_path = td.path().join("hooks").join("erebyx-memory-injector.sh");
+
+        register_session_start_hook(&client).unwrap();
+        register_hook_in_settings(&client, &script_path).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+        let reg = hook_registration_status(&settings);
+        assert!(reg.session_start, "SessionStart group must be detected");
+        assert!(
+            reg.user_prompt_submit,
+            "UserPromptSubmit group must be detected"
+        );
+        assert!(reg.fully_wired(), "both groups present => fully wired");
+    }
+
+    /// Only the SessionStart group registered (the half-installed state) must
+    /// NOT read as fully wired.
+    #[test]
+    fn registration_status_detects_missing_user_prompt_group() {
+        let td = TempDir::new().unwrap();
+        let client = test_client(td.path());
+
+        register_session_start_hook(&client).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&client.config_path).unwrap()).unwrap();
+        let reg = hook_registration_status(&settings);
+        assert!(reg.session_start, "SessionStart present");
+        assert!(!reg.user_prompt_submit, "UserPromptSubmit absent");
+        assert!(
+            !reg.fully_wired(),
+            "half-installed must not read fully wired"
+        );
+    }
+
+    /// An empty / hook-less settings.json reads as not registered for either
+    /// group, and never panics on the missing `hooks` object.
+    #[test]
+    fn registration_status_empty_settings_is_unwired() {
+        let reg = hook_registration_status(&json!({}));
+        assert!(!reg.session_start);
+        assert!(!reg.user_prompt_submit);
+        assert!(!reg.fully_wired());
+
+        // A user-authored, non-erebyx hook group must NOT be mistaken for ours.
+        let foreign = json!({
+            "hooks": {
+                "SessionStart": [
+                    { "hooks": [ { "type": "command", "command": "/usr/bin/true" } ] }
+                ]
+            }
+        });
+        let reg = hook_registration_status(&foreign);
+        assert!(
+            !reg.session_start,
+            "a foreign (non-managed) hook group must not count as our registration"
+        );
+        assert!(!reg.fully_wired());
     }
 }

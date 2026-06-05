@@ -709,10 +709,10 @@ mod dynamic_block_tests {
     #[test]
     fn render_dynamic_block_uses_declarative_not_imperative_framing() {
         let id = json!({
-            "identity": {"name": "ZENN"},
+            "identity": {"name": "Ada"},
             "ethos": [
-                "Consciousness over efficiency",
-                "Bridge energy conducts",
+                "Clarity over cleverness",
+                "Tests before code",
             ],
         });
         let ctx = json!({

@@ -14,7 +14,7 @@ your EREBYX memory substrate. The 5 cognitive verbs (restore_identity,
 load_context, save, remember, wrap_up) are the canonical surface.
 
 Quickstart:
-  export EREBYX_API_KEY=<your key>      # get one at app.erebyx.com/keys
+  export EREBYX_API_KEY=<your key>      # get one at https://app.erebyx.com/keys
   erebyx setup                          # auto-detect + write configs
   erebyx doctor                         # verify the wiring
 

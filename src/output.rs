@@ -125,7 +125,16 @@ pub fn map_actionable_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
 
     // Authentication — most common first-touch failure.
-    if raw.contains("401") || lower.contains("unauthorized") || lower.contains("auth") {
+    //
+    // CLI v0.1.2 fix [F9]: the bare `lower.contains("auth")` guard matched
+    // unrelated strings ("authoritative DNS", "authored by", "OAuth" in a
+    // success blurb) and mislabeled them as a 401. Match the specific
+    // auth-failure tokens instead of the `auth` substring.
+    if raw.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("unauthenticated")
+        || lower.contains("authentication")
+    {
         return "Authentication rejected (401). Check that EREBYX_API_KEY is set correctly.\n\
              • Verify in your shell: `echo $EREBYX_API_KEY`\n\
              • Get a fresh key at https://app.erebyx.com/keys\n\
@@ -145,7 +154,7 @@ pub fn map_actionable_error(raw: &str) -> String {
         return format!(
             "Request validation failed.\n\
              Original error: {raw}\n\
-             See https://docs.erebyx.com for field requirements."
+             See https://erebyx.com/core for field requirements."
         );
     }
 
@@ -322,7 +331,7 @@ mod tests {
     fn maps_422_to_validation_message() {
         let mapped = map_actionable_error("Server error: 422 Unprocessable Entity");
         assert!(mapped.contains("validation failed"));
-        assert!(mapped.contains("docs.erebyx.com"));
+        assert!(mapped.contains("erebyx.com/core"));
     }
 
     #[test]
@@ -396,12 +405,34 @@ mod tests {
     }
 
     #[test]
-    fn auth_branch_does_not_match_random_text() {
-        // Ensure the auth branch isn't matching ``unauth`` in random
-        // unrelated strings (it currently uses ``contains`` on ``auth``;
-        // this test pins that we accept that breadth deliberately).
-        let mapped = map_actionable_error("auth header sent OK then payload too large");
-        // This DOES match — documenting current behaviour.
-        assert!(mapped.contains("Authentication rejected"));
+    fn auth_branch_matches_specific_failure_tokens() {
+        // F9: the auth branch fires only on real auth-failure tokens.
+        for raw in &[
+            "401 Unauthorized",
+            "request was unauthorized",
+            "session unauthenticated",
+            "Authentication failed: bad key",
+        ] {
+            let mapped = map_actionable_error(raw);
+            assert!(
+                mapped.contains("Authentication rejected"),
+                "expected auth branch for {raw:?}, got: {mapped}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_branch_does_not_match_bare_auth_substring() {
+        // F9: the previous `contains("auth")` guard mislabeled any string
+        // carrying the `auth` substring (authoritative DNS, "authored by",
+        // a stray "OAuth" in a success blurb) as a 401. The narrowed guard
+        // must leave such strings untouched (pass-through unchanged).
+        let raw = "auth header sent OK then payload too large";
+        let mapped = map_actionable_error(raw);
+        assert!(
+            !mapped.contains("Authentication rejected"),
+            "bare 'auth' substring must NOT trip the auth branch, got: {mapped}"
+        );
+        assert_eq!(mapped, raw, "unmatched input must pass through unchanged");
     }
 }

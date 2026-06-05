@@ -135,6 +135,15 @@ pub(crate) fn is_safe_url(url: &str) -> bool {
         return false;
     };
     let host_part = rest.split('/').next().unwrap_or("");
+    // Reject any userinfo (`user:pass@host`) BEFORE the localhost match.
+    // `http://127.0.0.1:1@evil.com/` parses with authority host `evil.com`
+    // — without this guard the naive prefix check below would see the
+    // `127.0.0.1` userinfo and report SAFE, so the bearer token would be
+    // POSTed in plaintext to the attacker-controlled host. No legitimate
+    // localhost/IPv6 dev URL carries an `@`, so a blanket reject is safe.
+    if host_part.contains('@') {
+        return false;
+    }
     // P1-7 (2026-05-27): IPv6 literals are bracketed (`[::1]:8080`). The
     // prior `host_part.split(':').next()` returned `[` for that form and
     // rejected legitimate IPv6 localhost dev setups (Linux distros that
@@ -188,6 +197,29 @@ mod url_safety_tests {
     #[test]
     fn rejects_malformed_ipv6() {
         assert!(!is_safe_url("http://[:::"));
+    }
+
+    /// Userinfo-bypass defense: a `user:pass@host` authority must never be
+    /// treated as localhost. `http://127.0.0.1:1@evil.com/` connects to
+    /// `evil.com` (the real host) while the naive localhost prefix check
+    /// would otherwise see the `127.0.0.1` userinfo and report SAFE,
+    /// leaking the bearer token in plaintext to the attacker host.
+    #[test]
+    fn rejects_userinfo_bypass() {
+        assert!(!is_safe_url("http://127.0.0.1:1@evil.com/"));
+        assert!(!is_safe_url("http://localhost@evil.com"));
+        assert!(!is_safe_url("http://[::1]@evil.com"));
+        assert!(!is_safe_url("http://user:pass@evil.com"));
+    }
+
+    /// Regression guard: the userinfo reject must NOT break legitimate
+    /// localhost/IPv6 dev URLs, which never carry an `@`.
+    #[test]
+    fn userinfo_reject_preserves_legit_localhost() {
+        assert!(is_safe_url("http://localhost:8080"));
+        assert!(is_safe_url("http://127.0.0.1:8080/mcp"));
+        assert!(is_safe_url("http://[::1]:8080"));
+        assert!(is_safe_url("https://core.erebyx.com"));
     }
 }
 

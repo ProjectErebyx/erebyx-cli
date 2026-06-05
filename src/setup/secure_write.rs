@@ -58,6 +58,12 @@ pub fn erebyx_command() -> String {
 ///      complete file, never a truncated mix. This is what protects the
 ///      customer's WHOLE client config from corruption if the process dies
 ///      mid-write.
+///   4. On Windows, re-tighten the DACL on the final path via
+///      [`harden_windows_acl`] AFTER the rename. The rename replaces the
+///      destination's security descriptor, so without this every write would
+///      silently revert any DACL a caller had previously applied — hardening
+///      here makes the lock-down uniform with the unix `0o600` and
+///      independent of the caller.
 ///
 /// On any failure the temp file is best-effort removed so we don't litter
 /// `<path>.erebyx.tmp` next to the user's config.
@@ -133,6 +139,22 @@ pub fn atomic_write_secret(path: &Path, bytes: &[u8]) -> Result<()> {
     {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(e);
+    }
+
+    // Windows DACL hardening, AT the write boundary (fail-soft).
+    //
+    // The atomic `rename` above replaces the destination's security
+    // descriptor with the temp file's — so any DACL a CALLER previously
+    // tightened on `path` is silently reverted by every subsequent write.
+    // (The Claude Code `settings.json` is rewritten here by `hooks.rs` AFTER
+    // `config.rs` hardened it, which is exactly that revert.) Folding the
+    // tighten INTO this function means every secret write re-hardens the
+    // final file regardless of caller — the Windows analogue of the unix
+    // `0o600` we always pin above. `harden_windows_acl` is fail-soft and
+    // idempotent, so a caller that ALSO hardens (config.rs) is harmless.
+    #[cfg(windows)]
+    {
+        harden_windows_acl(path);
     }
 
     Ok(())

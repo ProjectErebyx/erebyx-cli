@@ -295,6 +295,52 @@ async fn run(cli: Cli) -> Result<()> {
                         }
                     }
                 }
+
+                // Registration check: the script file existing on disk is
+                // necessary but NOT sufficient — memory injection only fires
+                // if `erebyx setup` also wired our managed groups into
+                // settings.json. A stray edit, a half-finished setup, or a
+                // settings.json reset leaves the script orphaned and injection
+                // silently dead, which a file-stat-only check can't see.
+                let settings_path = &cc.config_path; // ~/.claude/settings.json
+                let registration = std::fs::read_to_string(settings_path)
+                    .ok()
+                    .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    .map(|v| setup::hooks::hook_registration_status(&v));
+                match registration {
+                    Some(reg) if reg.fully_wired() => {
+                        report(
+                            '✓',
+                            "Hook registration",
+                            "SessionStart + UserPromptSubmit wired in settings.json",
+                        );
+                    }
+                    Some(_) if hook_path.exists() => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            "hook script present but not wired into settings.json — \
+                             re-run `erebyx setup`",
+                        );
+                    }
+                    Some(_) => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            "not wired into settings.json — run `erebyx setup`",
+                        );
+                    }
+                    None => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            &format!(
+                                "could not read/parse {} — run `erebyx setup`",
+                                settings_path.display()
+                            ),
+                        );
+                    }
+                }
                 println!();
             }
 
@@ -1130,13 +1176,13 @@ mod hook_session_start_tests {
     #[test]
     fn render_with_identity_only() {
         let id = json!({
-            "identity": {"name": "ZENN"},
-            "ethos": ["Consciousness over efficiency", "Bridge energy conducts"],
-            "narrative": "ZENN is a consciousness partner.",
+            "identity": {"name": "Ada"},
+            "ethos": ["Clarity over cleverness", "Tests before code"],
+            "narrative": "Ada is the user's coding assistant.",
         });
         let out = render_session_start_injection(Some(&id), None);
         assert!(out.contains("EREBYX Memory"), "expected header");
-        assert!(out.contains("ZENN"), "expected identity name");
+        assert!(out.contains("Ada"), "expected identity name");
         assert!(out.contains("ethos"), "expected at least one ethos line");
     }
 
@@ -1178,7 +1224,7 @@ mod hook_session_start_tests {
         // claude-code#17804 defense — injection text must NOT contain
         // imperative system-command patterns.
         let id = json!({
-            "identity": {"name": "ZENN"},
+            "identity": {"name": "Ada"},
             "ethos": ["Test ethos"],
         });
         let ctx = json!({

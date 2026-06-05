@@ -73,7 +73,11 @@ detected AI client's MCP config file (e.g. `~/.claude/settings.json`,
   Granting SYSTEM and Administrators alongside your user prevents
   backup tools and AV scanners running as SYSTEM from losing read
   access (the bare `%USERNAME%:F` grant strips both inherited
-  rights). v0.1.2 will land the in-process fix via `windows-acl`.
+  rights). As of v0.1.2 the CLI applies this DACL in-process (via
+  `icacls`) on every secret write — including the Claude Code
+  `settings.json` — so the hardening sticks across the repeated
+  rewrites that path receives. The grant is fail-soft: if `icacls`
+  is unavailable the CLI falls back to the manual guidance above.
 - **Git working trees:** the CLI refuses to write a config file whose
   ancestor contains a `.git` directory unless you set
   `EREBYX_ALLOW_GIT_TREE_CONFIG=1` explicitly (truthy: `1`, `true`,
@@ -95,9 +99,9 @@ detected AI client's MCP config file (e.g. `~/.claude/settings.json`,
 | Area | Current limitation | Target fix |
 |---|---|---|
 | Client-side encryption | Memory is encrypted in transit (TLS 1.3) and at rest using XChaCha20-Poly1305 envelope encryption (AES-256-GCM legacy supported on existing rows) with per-tenant Key Encryption Keys wrapped under a server-held master KEK. At v0.1.1 EREBYX operationally holds the master KEK; per-user zero-knowledge encryption (passphrase-derived keys, EREBYX cannot decrypt) ships in v0.2. | v0.2+ |
-| Windows ACL hardening | v0.1.1 emits a warning instead of setting a user-only DACL on written configs. v0.1.2 will wire `windows-acl` or equivalent to close the multi-user-host gap. | v0.1.2 |
+| Windows ACL hardening | v0.1.1 emitted only a warning instead of setting a user-only DACL on written configs. v0.1.2 applies the DACL in-process via `icacls` on every secret write (fail-soft to the warning), closing the multi-user-host gap. | shipped v0.1.2 |
 | API-key rotation | Manual rotation via `app.erebyx.com/keys`; CLI does not yet auto-rotate | v0.2 |
-| Sandbox for `setup` writers | Config writers touch real client-config files; no dry-run mode | v0.1.x |
+| Sandbox for `setup` writers | Config writers touch real client-config files; `erebyx setup --dry-run` previews every write without modifying disk | v0.1.x |
 | Keyring storage path | `setup` writes the API key directly into each client's MCP config. A future `EREBYX_API_KEY_FILE` + OS-keyring path will keep the key out of the config files entirely. | v0.1.2 |
 
 ---
