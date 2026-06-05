@@ -7,6 +7,8 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+use super::config::secure_write::atomic_write_secret;
+use super::config::{env_flag_truthy, is_within_git_tree};
 use super::detect::{AiClient, ClientKind};
 
 /// The universal rules content that works across all AI models.
@@ -145,6 +147,19 @@ pub fn write_dynamic_block(client: &AiClient, dynamic_content: &str) -> Result<(
         return Ok(());
     }
 
+    // [7] The dynamic block carries SUBSTRATE STATE (identity name, last
+    // handoff). It's not an API key, but it's session-private context a user
+    // would not want committed to a public dotfiles repo — so extend the same
+    // git-tree refusal the credential writers enforce.
+    if is_within_git_tree(&client.rules_path) && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG") {
+        anyhow::bail!(
+            "Refusing to write the dynamic context block to {} — path is inside \
+             a git working tree. Set EREBYX_ALLOW_GIT_TREE_CONFIG=1 to override, \
+             or move your rules file outside the tree.",
+            client.rules_path.display()
+        );
+    }
+
     let existing = std::fs::read_to_string(&client.rules_path)
         .with_context(|| format!("Failed to read {}", client.rules_path.display()))?;
 
@@ -159,8 +174,11 @@ pub fn write_dynamic_block(client: &AiClient, dynamic_content: &str) -> Result<(
     // declarative tool descriptions on top, situational context below.
     let new_content = format!("{}\n\n{}\n", cleaned.trim_end(), marked);
 
-    std::fs::write(&client.rules_path, &new_content)
-        .with_context(|| format!("Failed to write {}", client.rules_path.display()))?;
+    // [7] Atomic + 0o600 write via the shared secret writer: the dynamic
+    // block is session-private substrate state, and an atomic replace also
+    // protects the user's whole rules file from truncation on a crash. STATIC
+    // rules files (non-secret) keep their plain `fs::write` writers above.
+    atomic_write_secret(&client.rules_path, new_content.as_bytes())?;
 
     Ok(())
 }
