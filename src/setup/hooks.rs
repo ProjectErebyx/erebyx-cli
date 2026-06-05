@@ -221,15 +221,21 @@ fn register_session_start_hook(client: &AiClient) -> Result<()> {
     // and iterates `SessionStart[].hooks[]`. A flat `{type,command}` pushed
     // directly into the array (what v0.1.0/v0.1.1 did) is NEVER executed —
     // the hook silently never fired. The correct shape is:
-    //   [{ "matcher": "startup", "hooks": [ {type, command} ], "_erebyx_managed": true }]
-    // The `_erebyx_managed` marker lives on the GROUP (the level CC iterates),
-    // not on the inner handler, so retention can find it.
+    //   [{ "hooks": [ {type, command} ], "_erebyx_managed": true }]
+    //
+    // We OMIT the `matcher` field deliberately. For SessionStart, the matcher
+    // selects the SOURCE (`startup` | `resume` | `clear` | `compact`); pinning
+    // `"startup"` would fire ONLY on a cold CLI start and NEVER on resume,
+    // /clear, or post-compaction — which are precisely the moments continuity
+    // matters most (re-opening a conversation, re-hydrating after a compact).
+    // No matcher = fires on EVERY session start, which is the whole point of
+    // restore-identity-on-wake. The `_erebyx_managed` marker lives on the GROUP
+    // (the level CC iterates), not the inner handler, so retention can find it.
     //
     // The command uses the absolute, symlink-resolved binary path (not bare
     // `erebyx`) so GUI-launched Claude Code with a minimal $PATH still fires.
     let hook_command = format!("{} hook-session-start", erebyx_command());
     let hook_group = serde_json::json!({
-        "matcher": "startup",
         "hooks": [
             {
                 "type": "command",
@@ -526,11 +532,13 @@ mod tests {
         );
     }
 
-    /// SessionStart: the written array element is a GROUP with
-    /// `matcher:"startup"`, `_erebyx_managed`, and a `hooks[]` whose handler
-    /// command is the ABSOLUTE-path session-start invocation.
+    /// SessionStart: the written array element is a GROUP with NO `matcher`
+    /// (match-all → fires on startup/resume/clear/compact), `_erebyx_managed`,
+    /// and a `hooks[]` whose handler command is the ABSOLUTE-path session-start
+    /// invocation. A pinned `matcher:"startup"` would skip resume/clear/compact
+    /// — the continuity-critical wakes — so the group MUST omit the matcher.
     #[test]
-    fn session_start_hook_is_written_as_matcher_group_with_startup_matcher() {
+    fn session_start_hook_is_written_as_matcher_group_match_all() {
         let td = TempDir::new().unwrap();
         let client = test_client(td.path());
 
@@ -542,10 +550,10 @@ mod tests {
         assert_eq!(arr.len(), 1, "exactly one SessionStart entry");
 
         let group = &arr[0];
-        assert_eq!(
-            group["matcher"].as_str(),
-            Some("startup"),
-            "SessionStart group must carry matcher=startup"
+        assert!(
+            group.get("matcher").is_none(),
+            "SessionStart group must OMIT the matcher (match-all over startup/resume/clear/compact), got {:?}",
+            group.get("matcher")
         );
         assert_eq!(group["_erebyx_managed"].as_bool(), Some(true));
         let handlers = group["hooks"].as_array().expect("group must have .hooks[]");

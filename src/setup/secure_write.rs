@@ -75,17 +75,36 @@ pub fn atomic_write_secret(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp_name.push(".erebyx.tmp");
     let tmp_path = parent.join(&tmp_name);
 
-    // Write the full contents to the temp file first.
-    if let Err(e) = std::fs::write(&tmp_path, bytes)
-        .with_context(|| format!("Failed to write temp file {}", tmp_path.display()))
-    {
+    // Create the temp file 0o600-AT-CREATION (unix) so the secret is NEVER
+    // world-readable — not even in the brief window the old write-then-chmod
+    // flow left open — and with O_EXCL (`create_new`) so a pre-placed symlink
+    // at the fixed temp path can't redirect the write to a file we don't own.
+    // A leftover temp from a prior hard crash is cleared first (best-effort) so
+    // create_new doesn't spuriously block on our own debris.
+    let _ = std::fs::remove_file(&tmp_path);
+    let write_result: Result<()> = (|| {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts
+            .open(&tmp_path)
+            .with_context(|| format!("Failed to create temp file {}", tmp_path.display()))?;
+        f.write_all(bytes)
+            .with_context(|| format!("Failed to write temp file {}", tmp_path.display()))?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(e);
     }
 
-    // Tighten perms on the TEMP file before it becomes visible at the final
-    // path. This closes the brief window where a 0o644 key file would be
-    // world-readable between write and chmod in the old non-atomic flow.
+    // Belt-and-suspenders: normalize to EXACTLY 0o600 on unix. Creation already
+    // bounded it to <= 0o600 via umask; this pins it regardless of umask.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
