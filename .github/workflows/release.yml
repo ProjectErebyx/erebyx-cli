@@ -47,10 +47,36 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # GATE (CLI v0.1.2 fix [12]): advisory + license + bans check. `publish-crate`
+  # `needs:` this, so a dependency with a known RUSTSEC advisory (or a
+  # disallowed license) hard-blocks the irreversible crates.io publish.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: cargo audit + deny (publish gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (at the tagged commit)
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo audit (RUSTSEC advisories)
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo deny check (advisories + licenses + bans + sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  # ---------------------------------------------------------------------------
   # MUST-HAVE: publish the crate to crates.io.
   # ---------------------------------------------------------------------------
   publish-crate:
     name: publish to crates.io
+    needs: audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (at the tagged commit)
@@ -85,6 +111,39 @@ jobs:
           echo "crate version = ${crate_version}"
           if [ "${tag_version}" != "${crate_version}" ]; then
             echo "::error::Git tag v${tag_version} does not match Cargo.toml version ${crate_version}." >&2
+            exit 1
+          fi
+
+      # CLI v0.1.2 fix [16]: assert the packaged file set matches the
+      # explicit `include` allowlist — no stray file leaks into the tarball,
+      # and the files install/build needs are all present. Fails loudly if an
+      # unexpected path appears or an expected one disappears.
+      - name: Verify packaged file list (allowlist)
+        run: |
+          set -euo pipefail
+          listing="$(cargo package --list --locked)"
+          echo "Packaged files:"
+          echo "${listing}"
+          # Required files that MUST be in every published tarball.
+          for required in \
+            "Cargo.toml" \
+            "Cargo.lock" \
+            "README.md" \
+            "CHANGELOG.md" \
+            "LICENSE-MIT" \
+            "LICENSE-APACHE-2.0" \
+            "NOTICE" \
+            "SECURITY.md" \
+            "src/main.rs" \
+            "examples/hello_world.rs" ; do
+            if ! grep -qx "${required}" <<< "${listing}"; then
+              echo "::error::Expected file '${required}' missing from cargo package --list" >&2
+              exit 1
+            fi
+          done
+          # Guard: no CI / dev-only / dotfiles should ever ship.
+          if grep -E '^(\.github/|\.git|deny\.toml|CONTRIBUTING\.md|DEV_QUICKSTART\.md)' <<< "${listing}"; then
+            echo "::error::Unexpected dev/CI file in packaged tarball (see match above)." >&2
             exit 1
           fi
 

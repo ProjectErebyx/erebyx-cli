@@ -8,6 +8,71 @@ Substrate-side release notes are summarized at [erebyx.com/core](https://erebyx.
 
 ---
 
+## [0.1.2] — 2026-06-05
+
+Surface-hardening release. No wire-protocol or CLI-flag breaking changes.
+
+### Fixed
+
+- **Claude Code hooks were wired at the wrong `settings.json` nesting** and never
+  fired in 0.1.0 / 0.1.1 — the memory-injection + session-start hooks silently
+  did nothing. **Re-run `erebyx setup`** to install the corrected hook wiring.
+- **`erebyx doctor` could panic** on a malformed `EREBYX_API_KEY` (an emoji or
+  other multibyte character pasted into the first 10 chars). The key preview is
+  now built on char boundaries and can never panic.
+- **`erebyx doctor` over-claimed key validity.** The Environment check now
+  validates the full advertised key shape (`erebyx_` + 48 hex chars) instead of
+  a loose length check, so a garbage key no longer renders a false `✓ set`.
+- **`erebyx doctor` reported a revoked/garbage key as "accepted".** The auth
+  check now probes an *authenticated* route (`tools/list` on `/mcp/`) instead of
+  the unauthenticated `/health` route, so a 401/403 surfaces honestly. The probe
+  lists tool schemas only — it never creates a memory.
+- **Client-config detection false-positives.** Detection of an existing erebyx
+  config no longer relies on a bare `"erebyx"` substring scan (which matched any
+  incidental mention in a comment or path). It now parses the config and checks
+  the exact key path this CLI writes per client.
+- **Windsurf global-rules path was wrong** (`~/.windsurfrules` is a project-root
+  file, not a `$HOME` global) — writing there was a silent no-op. Global rules
+  now go to `~/.codeium/windsurf/memories/global_rules.md`. The macOS app probe
+  is also gated to macOS.
+- **`erebyx setup` and `erebyx doctor` always exited 0**, even when every client
+  failed / the substrate was unreachable — so `erebyx setup && <next>` chained
+  past a broken install. Setup now exits non-zero when *all* clients fail (a
+  partial success still exits 0); doctor exits non-zero (code 2) on any failed
+  check.
+- **Server 5xx bodies were echoed verbatim** into the customer-facing error
+  message (noise, no credential). They are now dropped from the default message
+  and shown only under `RUST_LOG` / `EREBYX_VERBOSE`.
+- **`examples/hello_world.rs` could panic** truncating a multibyte preview;
+  fixed to truncate on char boundaries, and its SPDX header now matches the
+  crate's `MIT OR Apache-2.0` license.
+
+### Added
+
+- **`erebyx setup --yes`** (alias `-y` / `--force`) — skip the interactive
+  "Reconfigure?" confirmation so re-provisioning works under CI / non-TTY
+  environments without erroring with `not a terminal`.
+
+### Changed
+
+- **`erebyx doctor` now exits 2 on a failed check** (was always 0). Warnings
+  remain exit 0.
+- **Dependency trim**: dropped the unused `dialoguer` `fuzzy-select` feature (and
+  its `fuzzy-matcher` transitive dependency) — only `Password` + `Confirm` are
+  used.
+- **Crate packaging** switched from an `exclude` list to an explicit `include`
+  allowlist so only intended files ever ship.
+
+### CI / Release
+
+- CI now runs `clippy` + `test` on a `ubuntu` / `windows` / `macos` matrix so the
+  platform-specific path / hook code is compiled and linted on every PR.
+- Added a `cargo audit` + `cargo deny check` advisory/license/bans gate; the
+  crates.io publish job now `needs:` it, so a known-vuln dependency blocks a
+  release.
+
+---
+
 ## [0.1.1] — 2026-04-27 — Genesis Arche
 
 First public release. The CLI surfaces the EREBYX v0.1.1 cognitive verbs as native commands.
@@ -69,4 +134,5 @@ Confirm: `erebyx --version`
 
 ---
 
+[0.1.2]: https://github.com/ProjectErebyx/erebyx-cli/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ProjectErebyx/erebyx-cli/releases/tag/v0.1.1

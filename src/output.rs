@@ -103,6 +103,24 @@ pub fn print_error(msg: &str) {
 /// Brutal-review wave-2 (Genesis Arche T-5 days, 2026-05-27) flagged
 /// the raw-chain dump as a first-touch papercut that would cause
 /// developers to bounce on their first failed call.
+/// True when the caller has opted into verbose error output — used to gate
+/// echoing raw server bodies (CLI v0.1.2 fix [17]). Honors a non-empty
+/// `RUST_LOG` (the conventional Rust verbosity switch) or an explicit
+/// `EREBYX_VERBOSE` set to a truthy value.
+fn verbose_errors_enabled() -> bool {
+    std::env::var("RUST_LOG")
+        .ok()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("EREBYX_VERBOSE")
+            .ok()
+            .map(|v| {
+                let v = v.trim().to_lowercase();
+                matches!(v.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(false)
+}
+
 pub fn map_actionable_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
 
@@ -139,12 +157,22 @@ pub fn map_actionable_error(raw: &str) -> String {
     }
 
     // Server errors — point at status page.
+    //
+    // CLI v0.1.2 fix [17]: the raw server 5xx body (a stack-trace fragment /
+    // HTML error page / gateway blurb, up to 500 chars) was embedded in the
+    // default customer message — pure noise that buries the actionable line.
+    // It carries no credential (verified), so this is a clarity papercut, not
+    // a leak. Drop it from the default message; surface it only when the
+    // caller opts into verbosity via RUST_LOG (any non-empty value) or
+    // EREBYX_VERBOSE so an operator debugging an incident can still see it.
     if raw.contains("500") || raw.contains("502") || raw.contains("503") || raw.contains("504") {
-        return format!(
+        let base =
             "EREBYX server error. Try again in a few seconds; if it persists, check status.\n\
-             Original error: {raw}\n\
-             Status: https://status.erebyx.com"
-        );
+             Status: https://status.erebyx.com";
+        if verbose_errors_enabled() {
+            return format!("{base}\nOriginal error: {raw}");
+        }
+        return base.to_string();
     }
 
     // Network / DNS — pre-substrate failure.
@@ -308,6 +336,37 @@ mod tests {
         let mapped = map_actionable_error("Server error: 503 Service Unavailable");
         assert!(mapped.contains("server error"));
         assert!(mapped.contains("status.erebyx.com"));
+    }
+
+    /// CLI v0.1.2 fix [17]: the raw server 5xx body must NOT appear in the
+    /// default customer message. These tests mutate process env, so they run
+    /// serially and clean up after themselves.
+    #[test]
+    #[serial_test::serial]
+    fn fix17_5xx_default_drops_raw_body() {
+        // Ensure neither verbosity switch is set for the default-path test.
+        std::env::remove_var("RUST_LOG");
+        std::env::remove_var("EREBYX_VERBOSE");
+        let raw = "Server returned HTTP 500: <html>internal stack trace blah blah</html>";
+        let mapped = super::map_actionable_error(raw);
+        assert!(mapped.contains("status.erebyx.com"));
+        assert!(
+            !mapped.contains("stack trace") && !mapped.contains("<html>"),
+            "raw 5xx body must be dropped from the default message, got: {mapped}"
+        );
+        assert!(!mapped.contains("Original error"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fix17_5xx_verbose_surfaces_raw_body() {
+        std::env::remove_var("RUST_LOG");
+        std::env::set_var("EREBYX_VERBOSE", "1");
+        let raw = "Server returned HTTP 502: upstream connect error blah";
+        let mapped = super::map_actionable_error(raw);
+        std::env::remove_var("EREBYX_VERBOSE");
+        assert!(mapped.contains("Original error"));
+        assert!(mapped.contains("upstream connect error"));
     }
 
     #[test]
