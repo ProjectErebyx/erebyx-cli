@@ -827,6 +827,70 @@ mod hook_recall_query_tests {
     }
 }
 
+/// Wrap injected context in the EXACT envelope Claude Code consumes for a hook
+/// that adds context: `{"hookSpecificOutput":{"hookEventName":<event>,
+/// "additionalContext":<string>}}`.
+///
+/// Verified against the Claude Code hooks reference: `additionalContext` MUST be
+/// a plain STRING and MUST be nested under `hookSpecificOutput` alongside a
+/// matching `hookEventName`. A top-level `additionalContext`, or an array of
+/// `{type,text}` blocks, is parsed and then SILENTLY DISCARDED — the hook fires,
+/// fetches memory, formats it, and the context never reaches the model. That was
+/// the bug; the tests below pin the envelope so it cannot regress.
+fn hook_context_output(event_name: &str, context: &str) -> String {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": context,
+        }
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod hook_output_tests {
+    use super::hook_context_output;
+    use serde_json::Value;
+
+    #[test]
+    fn user_prompt_submit_envelope_is_exact() {
+        let out = hook_context_output("UserPromptSubmit", "line1\nline2");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        // additionalContext must NOT be top-level — Claude Code ignores it there.
+        assert!(
+            v.get("additionalContext").is_none(),
+            "additionalContext must be nested, never top-level"
+        );
+        let hso = v
+            .get("hookSpecificOutput")
+            .expect("hookSpecificOutput present");
+        assert_eq!(
+            hso.get("hookEventName").and_then(Value::as_str),
+            Some("UserPromptSubmit")
+        );
+        // Must be a plain STRING, never an array of {type,text} blocks.
+        assert_eq!(
+            hso.get("additionalContext").and_then(Value::as_str),
+            Some("line1\nline2")
+        );
+    }
+
+    #[test]
+    fn session_start_envelope_is_exact() {
+        let out = hook_context_output("SessionStart", "ctx");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("additionalContext").is_none());
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some("SessionStart")
+        );
+        assert!(
+            v["hookSpecificOutput"]["additionalContext"].is_string(),
+            "additionalContext must be a string"
+        );
+    }
+}
+
 async fn run_hook_inject() -> String {
     let empty = "{}".to_string();
 
@@ -942,13 +1006,7 @@ async fn run_hook_inject() -> String {
         return empty;
     }
 
-    json!({
-        "additionalContext": [{
-            "type": "text",
-            "text": lines.join("\n")
-        }]
-    })
-    .to_string()
+    hook_context_output("UserPromptSubmit", &lines.join("\n"))
 }
 
 /// Native SessionStart pre-injection hook for Claude Code (and Cursor 1.7+).
@@ -1057,13 +1115,7 @@ async fn run_hook_session_start() -> String {
         return empty;
     }
 
-    json!({
-        "additionalContext": [{
-            "type": "text",
-            "text": injection
-        }]
-    })
-    .to_string()
+    hook_context_output("SessionStart", &injection)
 }
 
 /// Render the SessionStart injection text — bounded to ~800 tokens (~3200
