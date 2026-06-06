@@ -33,27 +33,30 @@ async fn main() {
     }
 }
 
-/// Return true if `key` matches the advertised EREBYX API-key format:
-/// the literal prefix `erebyx_` followed by exactly 48 lowercase hex
-/// characters (55 chars total).
+/// Return true if `key` is STRUCTURALLY a canonical EREBYX API key: the prefix
+/// `ebx_live_` or `ebx_test_` followed by exactly 38 base62 (`[A-Za-z0-9]`)
+/// characters — 32 random + 6 checksum — for 47 chars total.
 ///
-/// CLI v0.1.2 fix [8]: the old gate (`starts_with("erebyx_") && len()>=32`)
-/// was far looser than the documented `erebyx_<48 hex chars>` shape, so a
-/// 35-char paste of garbage rendered a false `✓ set` in `erebyx doctor`.
-/// The auth section still does the real check against the substrate; this
-/// just stops the Environment section from over-claiming on an obviously
-/// malformed key.
-///
-/// NOTE (verify-before-publish): the `erebyx_<48 hex>` length/charset is
-/// taken from the documented format in this crate (config.rs, doctor copy)
-/// and the issuer copy at app.erebyx.com/keys. If the issuer ever changes
-/// the key shape (length or charset), update this predicate in lockstep.
+/// This MIRRORS the substrate's authoritative parser
+/// (`core/api/auth/api_keys.py::parse_canonical_key`): same two prefixes, same
+/// 47-char total, same base62 body. It is a STRUCTURAL pre-flight ONLY — the
+/// substrate verifies the checksum + looks the key up, and the doctor "Auth"
+/// section reports that real result. The job here is narrow: keep the
+/// Environment section from over-claiming `✓ set` on an obviously-malformed
+/// paste, without ever false-warning a real key. (The legacy `erebyx_<token>`
+/// shape is intentionally NOT accepted — the substrate's prefix gate rejects
+/// it, so a green ✓ here would mislead.)
 fn is_well_formed_api_key(key: &str) -> bool {
-    const HEX_LEN: usize = 48;
-    let Some(body) = key.strip_prefix("erebyx_") else {
+    // 32 random + 6 checksum base62 chars (api_keys.py _RANDOM_SEGMENT_LENGTH +
+    // _CHECKSUM_LENGTH); the 9-char prefix brings the total to 47.
+    const BODY_LEN: usize = 38;
+    let Some(body) = key
+        .strip_prefix("ebx_live_")
+        .or_else(|| key.strip_prefix("ebx_test_"))
+    else {
         return false;
     };
-    body.len() == HEX_LEN && body.bytes().all(|b| b.is_ascii_hexdigit())
+    body.len() == BODY_LEN && body.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -170,7 +173,7 @@ async fn run(cli: Cli) -> Result<()> {
                     report('✓', "EREBYX_API_KEY", &format!("set ({}…)", preview));
                 }
                 Some(_) => {
-                    report('⚠', "EREBYX_API_KEY", "set but format doesn't match `erebyx_<48 hex chars>` — may not authenticate");
+                    report('⚠', "EREBYX_API_KEY", "set but format doesn't match `ebx_live_…`/`ebx_test_…` (47 chars) — may not authenticate");
                 }
                 None => {
                     report(
@@ -1108,53 +1111,66 @@ fn render_session_start_injection(identity: Option<&Value>, context: Option<&Val
 mod api_key_format_tests {
     use super::is_well_formed_api_key;
 
-    #[test]
-    fn accepts_canonical_key() {
-        // erebyx_ + exactly 48 hex chars.
-        let key = format!("erebyx_{}", "a".repeat(48));
-        assert!(is_well_formed_api_key(&key));
-        let hexy = format!("erebyx_{}", "0123456789abcdef".repeat(3)); // 48 hex
-        assert!(is_well_formed_api_key(&hexy));
+    // A structurally-valid canonical key body: 38 base62 chars (digits + upper
+    // + lower), the exact length the substrate's parser expects (32 random + 6
+    // checksum). Real keys also carry a valid checksum in the last 6 chars, but
+    // this predicate is structural — the substrate verifies the checksum — so
+    // any 38 base62 chars are well-formed here. See
+    // core/api/auth/api_keys.py::parse_canonical_key.
+    fn body38() -> String {
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab".to_string()
     }
 
     #[test]
-    fn rejects_short_garbage_key() {
-        // CLI v0.1.2 fix [8]: a 35-char key that merely starts with the
-        // prefix used to render a false ✓. The tightened gate rejects it.
-        let key = "erebyx_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // 35 chars, non-hex body
-        assert!(!is_well_formed_api_key(key));
+    fn accepts_canonical_live_and_test_keys() {
+        let live = format!("ebx_live_{}", body38());
+        let test = format!("ebx_test_{}", body38());
+        assert_eq!(live.len(), 47, "canonical key is 47 chars total");
+        assert!(is_well_formed_api_key(&live));
+        assert!(is_well_formed_api_key(&test));
     }
 
     #[test]
-    fn rejects_wrong_length() {
-        assert!(!is_well_formed_api_key(&format!(
-            "erebyx_{}",
-            "a".repeat(47)
-        )));
-        assert!(!is_well_formed_api_key(&format!(
-            "erebyx_{}",
-            "a".repeat(49)
-        )));
+    fn rejects_legacy_erebyx_prefix() {
+        // The legacy `erebyx_<token>` shape no longer authenticates — the
+        // substrate prefix gate accepts only ebx_live_/ebx_test_ — so a green
+        // ✓ here would mislead. It must be rejected.
+        let legacy = format!("erebyx_{}", "a".repeat(48));
+        assert!(!is_well_formed_api_key(&legacy));
     }
 
     #[test]
-    fn rejects_non_hex_body() {
-        // 48 chars but contains a non-hex char (g, z).
-        let key = format!("erebyx_{}g", "a".repeat(47));
-        assert!(!is_well_formed_api_key(&key));
+    fn rejects_short_or_long_body() {
+        assert!(!is_well_formed_api_key("ebx_live_abc")); // truncated paste
+        let one_short = format!("ebx_live_{}", "a".repeat(37));
+        let one_long = format!("ebx_test_{}", "a".repeat(39));
+        assert!(!is_well_formed_api_key(&one_short));
+        assert!(!is_well_formed_api_key(&one_long));
     }
 
     #[test]
-    fn rejects_missing_prefix() {
-        assert!(!is_well_formed_api_key(&"a".repeat(55)));
+    fn rejects_non_base62_body() {
+        // base62 = [A-Za-z0-9]; url-safe `-`/`_` and other punctuation are out.
+        let with_dash = format!("ebx_live_{}-", "a".repeat(37));
+        let with_underscore = format!("ebx_live_{}_", "a".repeat(37));
+        assert!(!is_well_formed_api_key(&with_dash));
+        assert!(!is_well_formed_api_key(&with_underscore));
+    }
+
+    #[test]
+    fn rejects_wrong_or_missing_prefix() {
+        assert!(!is_well_formed_api_key(&"a".repeat(47))); // no prefix at all
+        let other_vendor = format!("sk_live_{}", body38());
+        assert!(!is_well_formed_api_key(&other_vendor)); // a different vendor's key
+        assert!(!is_well_formed_api_key("")); // empty
     }
 
     #[test]
     fn multibyte_key_does_not_panic_and_is_rejected() {
         // The exact paste error that crashed the doctor preview: an emoji
-        // straddling the first bytes. is_well_formed_api_key must reject it
-        // (and never panic), and the preview path uses .chars() so it's safe.
-        let key = "erebyx_🤘xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        // straddling the first bytes. Must reject it (and never panic); the
+        // preview path uses .chars() so it stays safe.
+        let key = "ebx_live_🤘xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
         assert!(!is_well_formed_api_key(key));
         // Mirror the doctor preview construction to prove it can't panic.
         let preview: String = key.chars().take(10).collect();

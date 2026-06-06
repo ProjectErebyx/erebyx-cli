@@ -671,7 +671,10 @@ mod probe_auth_tests {
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     fn client_for(uri: &str) -> ErebyxClient {
-        std::env::set_var("EREBYX_API_KEY", "erebyx_test_key");
+        std::env::set_var(
+            "EREBYX_API_KEY",
+            "ebx_test_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab",
+        );
         std::env::set_var("EREBYX_API_URL", uri);
         std::env::remove_var("EREBYX_PASSPHRASE");
         let c = ErebyxClient::new().expect("client builds for test");
