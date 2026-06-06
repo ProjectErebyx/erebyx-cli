@@ -23,6 +23,23 @@ pub fn session_id() -> &'static str {
     SESSION_ID.get_or_init(resolve_session_id).as_str()
 }
 
+/// Resolve the `X-Instance-ID` value: `EREBYX_INSTANCE_ID` (trimmed), or
+/// `"default"` when unset/blank.
+///
+/// Centralized so EVERY caller targets the SAME instance slice: the
+/// interactive `ErebyxClient`, the Claude Code hook handlers, and the `setup`
+/// reachability probes. The hooks + probes previously hardcoded `"default"`,
+/// so a user who set a custom `EREBYX_INSTANCE_ID` got a 403 on those paths —
+/// memory injection + session cold-load silently no-op'd — while their
+/// interactive commands (which honored the env var) worked. One value now.
+pub fn resolve_instance_id() -> String {
+    env::var("EREBYX_INSTANCE_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
 fn resolve_session_id() -> String {
     if let Ok(s) = env::var("EREBYX_SESSION_ID") {
         let trimmed = s.trim();
@@ -161,6 +178,45 @@ pub(crate) fn is_safe_url(url: &str) -> bool {
 }
 
 #[cfg(test)]
+mod instance_id_tests {
+    use super::resolve_instance_id;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn defaults_when_unset() {
+        std::env::remove_var("EREBYX_INSTANCE_ID");
+        assert_eq!(resolve_instance_id(), "default");
+    }
+
+    #[test]
+    #[serial]
+    fn uses_configured_value() {
+        std::env::set_var("EREBYX_INSTANCE_ID", "zenn");
+        assert_eq!(resolve_instance_id(), "zenn");
+        std::env::remove_var("EREBYX_INSTANCE_ID");
+    }
+
+    #[test]
+    #[serial]
+    fn blank_or_whitespace_falls_back_to_default() {
+        std::env::set_var("EREBYX_INSTANCE_ID", "   ");
+        assert_eq!(resolve_instance_id(), "default");
+        std::env::set_var("EREBYX_INSTANCE_ID", "");
+        assert_eq!(resolve_instance_id(), "default");
+        std::env::remove_var("EREBYX_INSTANCE_ID");
+    }
+
+    #[test]
+    #[serial]
+    fn trims_surrounding_whitespace() {
+        std::env::set_var("EREBYX_INSTANCE_ID", "  zenn  ");
+        assert_eq!(resolve_instance_id(), "zenn");
+        std::env::remove_var("EREBYX_INSTANCE_ID");
+    }
+}
+
+#[cfg(test)]
 mod url_safety_tests {
     use super::is_safe_url;
 
@@ -250,11 +306,13 @@ pub struct McpResponse {
     /// ``restore_identity_recommended``, ``load_context_recommended``,
     /// ``compact_imminent``.
     pub hints: Vec<String>,
-    /// Tools the substrate auto-fired during this request (parsed from
-    /// the ``X-Erebyx-Auto-Fired`` response header). Typically
-    /// ``["restore_identity", "load_context"]`` on the first call
-    /// against a fresh ``(instance_id, session_id)`` tuple, empty
-    /// thereafter.
+    /// Tools the substrate auto-fired during this request, parsed from the
+    /// ``X-Erebyx-Auto-Fired`` response header. NOTE: the `/mcp/` transport
+    /// this client uses injects only ``x-erebyx-hint`` — the auto-fired header
+    /// is emitted on the REST routes, not `/mcp/` — so over this client it is
+    /// currently always empty. Parsed anyway so it lights up automatically if
+    /// the `/mcp/` transport ever surfaces it; treat a populated value as a
+    /// bonus, never depend on it.
     pub auto_fired: Vec<String>,
 }
 
@@ -284,7 +342,7 @@ impl ErebyxClient {
 
         // Default to "default" — same canonical tenant slice across CLI / SDK / extension.
         // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
-        let instance_id = env::var("EREBYX_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+        let instance_id = resolve_instance_id();
 
         // Argon2id-default-on: tenants register with a passphrase used to
         // derive the KEK at request time. EREBYX_PASSPHRASE is the transport

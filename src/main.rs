@@ -11,7 +11,7 @@ use std::env;
 use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
-use client::{is_safe_url, session_id, ErebyxClient};
+use client::{is_safe_url, resolve_instance_id, session_id, ErebyxClient};
 use output::{map_actionable_error, print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
@@ -726,42 +726,32 @@ async fn hook_inject() {
     println!("{}", result);
 }
 
-async fn run_hook_inject() -> String {
-    let empty = "{}".to_string();
-
-    // Read hook input from stdin with a hard 1 MiB cap.
-    //
-    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
-    // misconfigured Claude Code build (or pipe-redirection misuse)
-    // feeding gigabytes of stdin would OOM the binary before the 500ms
-    // HTTP timeout ever fires. Real UserPromptSubmit payloads are
-    // <16KB; capping at 1 MiB leaves >60x headroom while keeping OOM
-    // surface bounded.
-    const MAX_HOOK_STDIN_BYTES: u64 = 1 << 20; // 1 MiB
-    let mut input = String::new();
-    let mut handle = std::io::stdin().take(MAX_HOOK_STDIN_BYTES);
-    if handle.read_to_string(&mut input).is_err() {
-        return empty;
-    }
-
-    // Parse the user_message field.
-    let parsed: Value = match serde_json::from_str(&input) {
-        Ok(v) => v,
-        Err(_) => return empty,
-    };
-    let user_message = parsed
-        .get("user_message")
+/// Extract the recall query from a Claude Code `UserPromptSubmit` hook payload
+/// and apply the smart gate. Returns `None` when there is nothing worth
+/// recalling: unparseable JSON, no message, a too-short message, or a greeting.
+///
+/// Claude Code sends the submitted prompt in the **`prompt`** field (verified
+/// against the Claude Code hooks reference). The legacy `user_message` field is
+/// accepted as a fallback for any non-Claude-Code caller. Reading the WRONG
+/// field (`user_message` only) is the bug that made this handler silently emit
+/// `{}` for every prompt — memory injection never fired. The unit tests below
+/// pin the real field name so it can never regress.
+fn hook_recall_query(input: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(input).ok()?;
+    let message = parsed
+        .get("prompt")
+        .or_else(|| parsed.get("user_message"))
         .and_then(|m| m.as_str())
         .unwrap_or("")
         .trim();
 
-    // Smart gate: skip short messages and common greetings.
-    // Pattern unified with `erebyx_sdk::middleware::is_greeting` so the CLI
-    // hook and the SDK middleware skip the same set of messages.
-    if user_message.len() < 15 {
-        return empty;
+    // Smart gate: skip short messages and common greetings. Pattern unified
+    // with `erebyx_sdk::middleware::is_greeting` so the CLI hook and the SDK
+    // middleware skip the same set of messages.
+    if message.len() < 15 {
+        return None;
     }
-    let lower = user_message.to_lowercase();
+    let lower = message.to_lowercase();
     let greetings = [
         "hey",
         "hi",
@@ -783,11 +773,84 @@ async fn run_hook_inject() -> String {
         "alright",
     ];
     if lower.len() < 30 && greetings.iter().any(|g| lower.starts_with(g)) {
+        return None;
+    }
+
+    // Truncate to 200 chars (UTF-8 safe).
+    Some(message.chars().take(200).collect())
+}
+
+#[cfg(test)]
+mod hook_recall_query_tests {
+    use super::hook_recall_query;
+
+    #[test]
+    fn reads_claude_code_prompt_field() {
+        // Claude Code's UserPromptSubmit sends `prompt`. Reading `user_message`
+        // (the prior bug) made the hook emit `{}` for every real prompt.
+        let q = hook_recall_query(r#"{"prompt":"what did we decide about the launch plan"}"#);
+        assert_eq!(
+            q.as_deref(),
+            Some("what did we decide about the launch plan")
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_user_message_fallback() {
+        let q = hook_recall_query(r#"{"user_message":"summarize the architecture decisions"}"#);
+        assert_eq!(q.as_deref(), Some("summarize the architecture decisions"));
+    }
+
+    #[test]
+    fn prompt_wins_when_both_present() {
+        let q = hook_recall_query(
+            r#"{"prompt":"the real claude code prompt text","user_message":"x"}"#,
+        );
+        assert_eq!(q.as_deref(), Some("the real claude code prompt text"));
+    }
+
+    #[test]
+    fn gates_out_short_greetings_and_garbage() {
+        assert_eq!(hook_recall_query(r#"{"prompt":"hi"}"#), None); // too short
+        assert_eq!(hook_recall_query(r#"{"prompt":"thanks so much!"}"#), None); // greeting
+        assert_eq!(hook_recall_query(r#"{"prompt":""}"#), None); // empty
+        assert_eq!(hook_recall_query("not json at all"), None); // unparseable
+        assert_eq!(hook_recall_query(r#"{"other":"no prompt field"}"#), None); // missing field
+    }
+
+    #[test]
+    fn truncates_to_200_chars() {
+        let long = "a".repeat(500);
+        let payload = format!(r#"{{"prompt":"{long}"}}"#);
+        let q = hook_recall_query(&payload).expect("a long prompt passes the gate");
+        assert_eq!(q.chars().count(), 200);
+    }
+}
+
+async fn run_hook_inject() -> String {
+    let empty = "{}".to_string();
+
+    // Read hook input from stdin with a hard 1 MiB cap.
+    //
+    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
+    // misconfigured Claude Code build (or pipe-redirection misuse)
+    // feeding gigabytes of stdin would OOM the binary before the 500ms
+    // HTTP timeout ever fires. Real UserPromptSubmit payloads are
+    // <16KB; capping at 1 MiB leaves >60x headroom while keeping OOM
+    // surface bounded.
+    const MAX_HOOK_STDIN_BYTES: u64 = 1 << 20; // 1 MiB
+    let mut input = String::new();
+    let mut handle = std::io::stdin().take(MAX_HOOK_STDIN_BYTES);
+    if handle.read_to_string(&mut input).is_err() {
         return empty;
     }
 
-    // Truncate query to 200 chars (UTF-8 safe).
-    let query: String = user_message.chars().take(200).collect();
+    // Extract the recall query + apply the smart gate. `None` => nothing worth
+    // recalling (unparseable / no message / too short / greeting) => emit `{}`.
+    let query = match hook_recall_query(&input) {
+        Some(q) => q,
+        None => return empty,
+    };
 
     // Read API key + URL from env. Fail-open if missing.
     let api_key = match std::env::var("EREBYX_API_KEY") {
@@ -822,7 +885,7 @@ async fn run_hook_inject() -> String {
         .post(&url)
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session_id())
         .json(&body)
         .send()
@@ -960,7 +1023,7 @@ async fn run_hook_session_start() -> String {
         .post(format!("{}/v0/identity/restore", base))
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session)
         .json(&json!({"detail_level": "summary", "limit": 5}))
         .send()
@@ -976,7 +1039,7 @@ async fn run_hook_session_start() -> String {
         .post(format!("{}/v0/session/load", base))
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session)
         .json(&json!({"anchors": [], "detail_level": "summary"}))
         .send()
