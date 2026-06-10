@@ -11,7 +11,7 @@ use std::env;
 use std::io::{IsTerminal, Read};
 
 use cli::{Cli, Commands};
-use client::{is_safe_url, session_id, ErebyxClient};
+use client::{is_safe_url, resolve_instance_id, session_id, ErebyxClient};
 use output::{map_actionable_error, print_error, print_response, print_response_with_hints};
 
 #[tokio::main]
@@ -33,27 +33,30 @@ async fn main() {
     }
 }
 
-/// Return true if `key` matches the advertised EREBYX API-key format:
-/// the literal prefix `erebyx_` followed by exactly 48 lowercase hex
-/// characters (55 chars total).
+/// Return true if `key` is STRUCTURALLY a canonical EREBYX API key: the prefix
+/// `ebx_live_` or `ebx_test_` followed by exactly 38 base62 (`[A-Za-z0-9]`)
+/// characters — 32 random + 6 checksum — for 47 chars total.
 ///
-/// CLI v0.1.2 fix [8]: the old gate (`starts_with("erebyx_") && len()>=32`)
-/// was far looser than the documented `erebyx_<48 hex chars>` shape, so a
-/// 35-char paste of garbage rendered a false `✓ set` in `erebyx doctor`.
-/// The auth section still does the real check against the substrate; this
-/// just stops the Environment section from over-claiming on an obviously
-/// malformed key.
-///
-/// NOTE (verify-before-publish): the `erebyx_<48 hex>` length/charset is
-/// taken from the documented format in this crate (config.rs, doctor copy)
-/// and the issuer copy at app.erebyx.com/keys. If the issuer ever changes
-/// the key shape (length or charset), update this predicate in lockstep.
+/// This MIRRORS the substrate's authoritative parser
+/// (`core/api/auth/api_keys.py::parse_canonical_key`): same two prefixes, same
+/// 47-char total, same base62 body. It is a STRUCTURAL pre-flight ONLY — the
+/// substrate verifies the checksum + looks the key up, and the doctor "Auth"
+/// section reports that real result. The job here is narrow: keep the
+/// Environment section from over-claiming `✓ set` on an obviously-malformed
+/// paste, without ever false-warning a real key. (The legacy `erebyx_<token>`
+/// shape is intentionally NOT accepted — the substrate's prefix gate rejects
+/// it, so a green ✓ here would mislead.)
 fn is_well_formed_api_key(key: &str) -> bool {
-    const HEX_LEN: usize = 48;
-    let Some(body) = key.strip_prefix("erebyx_") else {
+    // 32 random + 6 checksum base62 chars (api_keys.py _RANDOM_SEGMENT_LENGTH +
+    // _CHECKSUM_LENGTH); the 9-char prefix brings the total to 47.
+    const BODY_LEN: usize = 38;
+    let Some(body) = key
+        .strip_prefix("ebx_live_")
+        .or_else(|| key.strip_prefix("ebx_test_"))
+    else {
         return false;
     };
-    body.len() == HEX_LEN && body.bytes().all(|b| b.is_ascii_hexdigit())
+    body.len() == BODY_LEN && body.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -170,7 +173,7 @@ async fn run(cli: Cli) -> Result<()> {
                     report('✓', "EREBYX_API_KEY", &format!("set ({}…)", preview));
                 }
                 Some(_) => {
-                    report('⚠', "EREBYX_API_KEY", "set but format doesn't match `erebyx_<48 hex chars>` — may not authenticate");
+                    report('⚠', "EREBYX_API_KEY", "set but format doesn't match `ebx_live_…`/`ebx_test_…` (47 chars) — may not authenticate");
                 }
                 None => {
                     report(
@@ -293,6 +296,52 @@ async fn run(cli: Cli) -> Result<()> {
                             }
                             Err(e) => report('⚠', "Hook permissions", &e.to_string()),
                         }
+                    }
+                }
+
+                // Registration check: the script file existing on disk is
+                // necessary but NOT sufficient — memory injection only fires
+                // if `erebyx setup` also wired our managed groups into
+                // settings.json. A stray edit, a half-finished setup, or a
+                // settings.json reset leaves the script orphaned and injection
+                // silently dead, which a file-stat-only check can't see.
+                let settings_path = &cc.config_path; // ~/.claude/settings.json
+                let registration = std::fs::read_to_string(settings_path)
+                    .ok()
+                    .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    .map(|v| setup::hooks::hook_registration_status(&v));
+                match registration {
+                    Some(reg) if reg.fully_wired() => {
+                        report(
+                            '✓',
+                            "Hook registration",
+                            "SessionStart + UserPromptSubmit wired in settings.json",
+                        );
+                    }
+                    Some(_) if hook_path.exists() => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            "hook script present but not wired into settings.json — \
+                             re-run `erebyx setup`",
+                        );
+                    }
+                    Some(_) => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            "not wired into settings.json — run `erebyx setup`",
+                        );
+                    }
+                    None => {
+                        report(
+                            '⚠',
+                            "Hook registration",
+                            &format!(
+                                "could not read/parse {} — run `erebyx setup`",
+                                settings_path.display()
+                            ),
+                        );
                     }
                 }
                 println!();
@@ -677,42 +726,32 @@ async fn hook_inject() {
     println!("{}", result);
 }
 
-async fn run_hook_inject() -> String {
-    let empty = "{}".to_string();
-
-    // Read hook input from stdin with a hard 1 MiB cap.
-    //
-    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
-    // misconfigured Claude Code build (or pipe-redirection misuse)
-    // feeding gigabytes of stdin would OOM the binary before the 500ms
-    // HTTP timeout ever fires. Real UserPromptSubmit payloads are
-    // <16KB; capping at 1 MiB leaves >60x headroom while keeping OOM
-    // surface bounded.
-    const MAX_HOOK_STDIN_BYTES: u64 = 1 << 20; // 1 MiB
-    let mut input = String::new();
-    let mut handle = std::io::stdin().take(MAX_HOOK_STDIN_BYTES);
-    if handle.read_to_string(&mut input).is_err() {
-        return empty;
-    }
-
-    // Parse the user_message field.
-    let parsed: Value = match serde_json::from_str(&input) {
-        Ok(v) => v,
-        Err(_) => return empty,
-    };
-    let user_message = parsed
-        .get("user_message")
+/// Extract the recall query from a Claude Code `UserPromptSubmit` hook payload
+/// and apply the smart gate. Returns `None` when there is nothing worth
+/// recalling: unparseable JSON, no message, a too-short message, or a greeting.
+///
+/// Claude Code sends the submitted prompt in the **`prompt`** field (verified
+/// against the Claude Code hooks reference). The legacy `user_message` field is
+/// accepted as a fallback for any non-Claude-Code caller. Reading the WRONG
+/// field (`user_message` only) is the bug that made this handler silently emit
+/// `{}` for every prompt — memory injection never fired. The unit tests below
+/// pin the real field name so it can never regress.
+fn hook_recall_query(input: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(input).ok()?;
+    let message = parsed
+        .get("prompt")
+        .or_else(|| parsed.get("user_message"))
         .and_then(|m| m.as_str())
         .unwrap_or("")
         .trim();
 
-    // Smart gate: skip short messages and common greetings.
-    // Pattern unified with `erebyx_sdk::middleware::is_greeting` so the CLI
-    // hook and the SDK middleware skip the same set of messages.
-    if user_message.len() < 15 {
-        return empty;
+    // Smart gate: skip short messages and common greetings. Pattern unified
+    // with `erebyx_sdk::middleware::is_greeting` so the CLI hook and the SDK
+    // middleware skip the same set of messages.
+    if message.len() < 15 {
+        return None;
     }
-    let lower = user_message.to_lowercase();
+    let lower = message.to_lowercase();
     let greetings = [
         "hey",
         "hi",
@@ -734,11 +773,148 @@ async fn run_hook_inject() -> String {
         "alright",
     ];
     if lower.len() < 30 && greetings.iter().any(|g| lower.starts_with(g)) {
+        return None;
+    }
+
+    // Truncate to 200 chars (UTF-8 safe).
+    Some(message.chars().take(200).collect())
+}
+
+#[cfg(test)]
+mod hook_recall_query_tests {
+    use super::hook_recall_query;
+
+    #[test]
+    fn reads_claude_code_prompt_field() {
+        // Claude Code's UserPromptSubmit sends `prompt`. Reading `user_message`
+        // (the prior bug) made the hook emit `{}` for every real prompt.
+        let q = hook_recall_query(r#"{"prompt":"what did we decide about the launch plan"}"#);
+        assert_eq!(
+            q.as_deref(),
+            Some("what did we decide about the launch plan")
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_user_message_fallback() {
+        let q = hook_recall_query(r#"{"user_message":"summarize the architecture decisions"}"#);
+        assert_eq!(q.as_deref(), Some("summarize the architecture decisions"));
+    }
+
+    #[test]
+    fn prompt_wins_when_both_present() {
+        let q = hook_recall_query(
+            r#"{"prompt":"the real claude code prompt text","user_message":"x"}"#,
+        );
+        assert_eq!(q.as_deref(), Some("the real claude code prompt text"));
+    }
+
+    #[test]
+    fn gates_out_short_greetings_and_garbage() {
+        assert_eq!(hook_recall_query(r#"{"prompt":"hi"}"#), None); // too short
+        assert_eq!(hook_recall_query(r#"{"prompt":"thanks so much!"}"#), None); // greeting
+        assert_eq!(hook_recall_query(r#"{"prompt":""}"#), None); // empty
+        assert_eq!(hook_recall_query("not json at all"), None); // unparseable
+        assert_eq!(hook_recall_query(r#"{"other":"no prompt field"}"#), None); // missing field
+    }
+
+    #[test]
+    fn truncates_to_200_chars() {
+        let long = "a".repeat(500);
+        let payload = format!(r#"{{"prompt":"{long}"}}"#);
+        let q = hook_recall_query(&payload).expect("a long prompt passes the gate");
+        assert_eq!(q.chars().count(), 200);
+    }
+}
+
+/// Wrap injected context in the EXACT envelope Claude Code consumes for a hook
+/// that adds context: `{"hookSpecificOutput":{"hookEventName":<event>,
+/// "additionalContext":<string>}}`.
+///
+/// Verified against the Claude Code hooks reference: `additionalContext` MUST be
+/// a plain STRING and MUST be nested under `hookSpecificOutput` alongside a
+/// matching `hookEventName`. A top-level `additionalContext`, or an array of
+/// `{type,text}` blocks, is parsed and then SILENTLY DISCARDED — the hook fires,
+/// fetches memory, formats it, and the context never reaches the model. That was
+/// the bug; the tests below pin the envelope so it cannot regress.
+fn hook_context_output(event_name: &str, context: &str) -> String {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": context,
+        }
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod hook_output_tests {
+    use super::hook_context_output;
+    use serde_json::Value;
+
+    #[test]
+    fn user_prompt_submit_envelope_is_exact() {
+        let out = hook_context_output("UserPromptSubmit", "line1\nline2");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        // additionalContext must NOT be top-level — Claude Code ignores it there.
+        assert!(
+            v.get("additionalContext").is_none(),
+            "additionalContext must be nested, never top-level"
+        );
+        let hso = v
+            .get("hookSpecificOutput")
+            .expect("hookSpecificOutput present");
+        assert_eq!(
+            hso.get("hookEventName").and_then(Value::as_str),
+            Some("UserPromptSubmit")
+        );
+        // Must be a plain STRING, never an array of {type,text} blocks.
+        assert_eq!(
+            hso.get("additionalContext").and_then(Value::as_str),
+            Some("line1\nline2")
+        );
+    }
+
+    #[test]
+    fn session_start_envelope_is_exact() {
+        let out = hook_context_output("SessionStart", "ctx");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("additionalContext").is_none());
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some("SessionStart")
+        );
+        assert!(
+            v["hookSpecificOutput"]["additionalContext"].is_string(),
+            "additionalContext must be a string"
+        );
+    }
+}
+
+async fn run_hook_inject() -> String {
+    let empty = "{}".to_string();
+
+    // Read hook input from stdin with a hard 1 MiB cap.
+    //
+    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
+    // misconfigured Claude Code build (or pipe-redirection misuse)
+    // feeding gigabytes of stdin would OOM the binary before the 500ms
+    // HTTP timeout ever fires. Real UserPromptSubmit payloads are
+    // <16KB; capping at 1 MiB leaves >60x headroom while keeping OOM
+    // surface bounded.
+    const MAX_HOOK_STDIN_BYTES: u64 = 1 << 20; // 1 MiB
+    let mut input = String::new();
+    let mut handle = std::io::stdin().take(MAX_HOOK_STDIN_BYTES);
+    if handle.read_to_string(&mut input).is_err() {
         return empty;
     }
 
-    // Truncate query to 200 chars (UTF-8 safe).
-    let query: String = user_message.chars().take(200).collect();
+    // Extract the recall query + apply the smart gate. `None` => nothing worth
+    // recalling (unparseable / no message / too short / greeting) => emit `{}`.
+    let query = match hook_recall_query(&input) {
+        Some(q) => q,
+        None => return empty,
+    };
 
     // Read API key + URL from env. Fail-open if missing.
     let api_key = match std::env::var("EREBYX_API_KEY") {
@@ -773,7 +949,7 @@ async fn run_hook_inject() -> String {
         .post(&url)
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session_id())
         .json(&body)
         .send()
@@ -830,13 +1006,7 @@ async fn run_hook_inject() -> String {
         return empty;
     }
 
-    json!({
-        "additionalContext": [{
-            "type": "text",
-            "text": lines.join("\n")
-        }]
-    })
-    .to_string()
+    hook_context_output("UserPromptSubmit", &lines.join("\n"))
 }
 
 /// Native SessionStart pre-injection hook for Claude Code (and Cursor 1.7+).
@@ -911,7 +1081,7 @@ async fn run_hook_session_start() -> String {
         .post(format!("{}/v0/identity/restore", base))
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session)
         .json(&json!({"detail_level": "summary", "limit": 5}))
         .send()
@@ -927,7 +1097,7 @@ async fn run_hook_session_start() -> String {
         .post(format!("{}/v0/session/load", base))
         .header("Content-Type", "application/json")
         .bearer_auth(&api_key)
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", session)
         .json(&json!({"anchors": [], "detail_level": "summary"}))
         .send()
@@ -945,13 +1115,7 @@ async fn run_hook_session_start() -> String {
         return empty;
     }
 
-    json!({
-        "additionalContext": [{
-            "type": "text",
-            "text": injection
-        }]
-    })
-    .to_string()
+    hook_context_output("SessionStart", &injection)
 }
 
 /// Render the SessionStart injection text — bounded to ~800 tokens (~3200
@@ -1062,53 +1226,66 @@ fn render_session_start_injection(identity: Option<&Value>, context: Option<&Val
 mod api_key_format_tests {
     use super::is_well_formed_api_key;
 
-    #[test]
-    fn accepts_canonical_key() {
-        // erebyx_ + exactly 48 hex chars.
-        let key = format!("erebyx_{}", "a".repeat(48));
-        assert!(is_well_formed_api_key(&key));
-        let hexy = format!("erebyx_{}", "0123456789abcdef".repeat(3)); // 48 hex
-        assert!(is_well_formed_api_key(&hexy));
+    // A structurally-valid canonical key body: 38 base62 chars (digits + upper
+    // + lower), the exact length the substrate's parser expects (32 random + 6
+    // checksum). Real keys also carry a valid checksum in the last 6 chars, but
+    // this predicate is structural — the substrate verifies the checksum — so
+    // any 38 base62 chars are well-formed here. See
+    // core/api/auth/api_keys.py::parse_canonical_key.
+    fn body38() -> String {
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab".to_string()
     }
 
     #[test]
-    fn rejects_short_garbage_key() {
-        // CLI v0.1.2 fix [8]: a 35-char key that merely starts with the
-        // prefix used to render a false ✓. The tightened gate rejects it.
-        let key = "erebyx_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // 35 chars, non-hex body
-        assert!(!is_well_formed_api_key(key));
+    fn accepts_canonical_live_and_test_keys() {
+        let live = format!("ebx_live_{}", body38());
+        let test = format!("ebx_test_{}", body38());
+        assert_eq!(live.len(), 47, "canonical key is 47 chars total");
+        assert!(is_well_formed_api_key(&live));
+        assert!(is_well_formed_api_key(&test));
     }
 
     #[test]
-    fn rejects_wrong_length() {
-        assert!(!is_well_formed_api_key(&format!(
-            "erebyx_{}",
-            "a".repeat(47)
-        )));
-        assert!(!is_well_formed_api_key(&format!(
-            "erebyx_{}",
-            "a".repeat(49)
-        )));
+    fn rejects_legacy_erebyx_prefix() {
+        // The legacy `erebyx_<token>` shape no longer authenticates — the
+        // substrate prefix gate accepts only ebx_live_/ebx_test_ — so a green
+        // ✓ here would mislead. It must be rejected.
+        let legacy = format!("erebyx_{}", "a".repeat(48));
+        assert!(!is_well_formed_api_key(&legacy));
     }
 
     #[test]
-    fn rejects_non_hex_body() {
-        // 48 chars but contains a non-hex char (g, z).
-        let key = format!("erebyx_{}g", "a".repeat(47));
-        assert!(!is_well_formed_api_key(&key));
+    fn rejects_short_or_long_body() {
+        assert!(!is_well_formed_api_key("ebx_live_abc")); // truncated paste
+        let one_short = format!("ebx_live_{}", "a".repeat(37));
+        let one_long = format!("ebx_test_{}", "a".repeat(39));
+        assert!(!is_well_formed_api_key(&one_short));
+        assert!(!is_well_formed_api_key(&one_long));
     }
 
     #[test]
-    fn rejects_missing_prefix() {
-        assert!(!is_well_formed_api_key(&"a".repeat(55)));
+    fn rejects_non_base62_body() {
+        // base62 = [A-Za-z0-9]; url-safe `-`/`_` and other punctuation are out.
+        let with_dash = format!("ebx_live_{}-", "a".repeat(37));
+        let with_underscore = format!("ebx_live_{}_", "a".repeat(37));
+        assert!(!is_well_formed_api_key(&with_dash));
+        assert!(!is_well_formed_api_key(&with_underscore));
+    }
+
+    #[test]
+    fn rejects_wrong_or_missing_prefix() {
+        assert!(!is_well_formed_api_key(&"a".repeat(47))); // no prefix at all
+        let other_vendor = format!("sk_live_{}", body38());
+        assert!(!is_well_formed_api_key(&other_vendor)); // a different vendor's key
+        assert!(!is_well_formed_api_key("")); // empty
     }
 
     #[test]
     fn multibyte_key_does_not_panic_and_is_rejected() {
         // The exact paste error that crashed the doctor preview: an emoji
-        // straddling the first bytes. is_well_formed_api_key must reject it
-        // (and never panic), and the preview path uses .chars() so it's safe.
-        let key = "erebyx_🤘xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        // straddling the first bytes. Must reject it (and never panic); the
+        // preview path uses .chars() so it stays safe.
+        let key = "ebx_live_🤘xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
         assert!(!is_well_formed_api_key(key));
         // Mirror the doctor preview construction to prove it can't panic.
         let preview: String = key.chars().take(10).collect();
@@ -1130,13 +1307,13 @@ mod hook_session_start_tests {
     #[test]
     fn render_with_identity_only() {
         let id = json!({
-            "identity": {"name": "ZENN"},
-            "ethos": ["Consciousness over efficiency", "Bridge energy conducts"],
-            "narrative": "ZENN is a consciousness partner.",
+            "identity": {"name": "Ada"},
+            "ethos": ["Clarity over cleverness", "Tests before code"],
+            "narrative": "Ada is the user's coding assistant.",
         });
         let out = render_session_start_injection(Some(&id), None);
         assert!(out.contains("EREBYX Memory"), "expected header");
-        assert!(out.contains("ZENN"), "expected identity name");
+        assert!(out.contains("Ada"), "expected identity name");
         assert!(out.contains("ethos"), "expected at least one ethos line");
     }
 
@@ -1178,7 +1355,7 @@ mod hook_session_start_tests {
         // claude-code#17804 defense — injection text must NOT contain
         // imperative system-command patterns.
         let id = json!({
-            "identity": {"name": "ZENN"},
+            "identity": {"name": "Ada"},
             "ethos": ["Test ethos"],
         });
         let ctx = json!({

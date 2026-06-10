@@ -341,7 +341,7 @@ mod tests {
         // Write dynamic block — should appear AFTER the static block.
         write_dynamic_block(
             &client,
-            "Stored identity: ZENN\nLast handoff: shipped session-start hook",
+            "Stored identity: Ada\nLast handoff: shipped session-start hook",
         )
         .unwrap();
         let content = std::fs::read_to_string(&rules_path).unwrap();
@@ -354,7 +354,7 @@ mod tests {
             "dynamic block written"
         );
         assert!(
-            content.contains("Stored identity: ZENN"),
+            content.contains("Stored identity: Ada"),
             "dynamic content present"
         );
         // Order: STATIC must come before DYNAMIC.
@@ -368,7 +368,7 @@ mod tests {
         // Re-write dynamic block with new content — should REPLACE, not duplicate.
         write_dynamic_block(
             &client,
-            "Stored identity: ZENN\nLast handoff: dynamic refresh works",
+            "Stored identity: Ada\nLast handoff: dynamic refresh works",
         )
         .unwrap();
         let content2 = std::fs::read_to_string(&rules_path).unwrap();

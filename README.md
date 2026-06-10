@@ -3,8 +3,8 @@
 > Connect any MCP-capable AI to your EREBYX memory substrate. Persistent memory across every AI you use.
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE-2.0)
-[![Version](https://img.shields.io/badge/version-0.1.1-green.svg)](CHANGELOG.md)
-[![DCO](https://img.shields.io/badge/DCO-required-orange.svg)](CONTRIBUTING.md#sign-off-dco)
+[![Version](https://img.shields.io/crates/v/erebyx.svg)](https://crates.io/crates/erebyx)
+[![DCO](https://img.shields.io/badge/DCO-required-orange.svg)](https://github.com/ProjectErebyx/erebyx-cli/blob/main/CONTRIBUTING.md#sign-off-dco)
 
 ---
 
@@ -153,7 +153,7 @@ Hint values:
 - `load_context_recommended` — retrieval scores trending low
 - `compact_imminent` — sustained save volume; consolidate before context fills
 
-Honoring hints is optional. Disable globally with `EREBYX_HINTS_DISABLED=1`. Full hint protocol at [DEV_QUICKSTART.md](DEV_QUICKSTART.md#x-erebyx-hint-lifecycle-signals).
+Honoring hints is optional. Disable globally with `EREBYX_HINTS_DISABLED=1`. Full hint protocol at [DEV_QUICKSTART.md](https://github.com/ProjectErebyx/erebyx-cli/blob/main/DEV_QUICKSTART.md#x-erebyx-hint--lifecycle-signals).
 
 ---
 
@@ -259,7 +259,7 @@ cargo build --release
 
 ## Contributing
 
-Pull requests welcome. DCO sign-off required (`git commit -s`). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Pull requests welcome. DCO sign-off required (`git commit -s`). See [CONTRIBUTING.md](https://github.com/ProjectErebyx/erebyx-cli/blob/main/CONTRIBUTING.md).
 
 ## Security
 

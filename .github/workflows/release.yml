@@ -62,12 +62,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: cargo audit (RUSTSEC advisories)
-        uses: rustsec/audit-check@v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: cargo deny check (advisories + licenses + bans + sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check
 

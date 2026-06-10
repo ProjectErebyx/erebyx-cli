@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use detect::{detect_clients, AiClient};
 
-use crate::client::is_safe_url;
+use crate::client::{is_safe_url, resolve_instance_id};
 
 /// Shared error message for an unsafe `EREBYX_API_URL` — matches the
 /// `ErebyxClient::new` guard wording so the operator sees one consistent
@@ -99,7 +99,7 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .post(format!("{}/v0/identity/restore", base))
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", &session)
         .json(&json!({"detail_level": "summary", "limit": 5}))
         .send()
@@ -114,7 +114,7 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .post(format!("{}/v0/session/load", base))
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", "default")
+        .header("X-Instance-ID", resolve_instance_id())
         .header("X-Erebyx-Session-Id", &session)
         .json(&json!({"anchors": [], "detail_level": "summary"}))
         .send()
@@ -709,10 +709,10 @@ mod dynamic_block_tests {
     #[test]
     fn render_dynamic_block_uses_declarative_not_imperative_framing() {
         let id = json!({
-            "identity": {"name": "ZENN"},
+            "identity": {"name": "Ada"},
             "ethos": [
-                "Consciousness over efficiency",
-                "Bridge energy conducts",
+                "Clarity over cleverness",
+                "Tests before code",
             ],
         });
         let ctx = json!({
