@@ -8,6 +8,51 @@ Substrate-side release notes are summarized at [erebyx.com/core](https://erebyx.
 
 ---
 
+## [0.1.3] — 2026-06-16
+
+Client-coverage release. `erebyx setup` now detects and configures seven more
+MCP clients. No wire-protocol or CLI-flag breaking changes; all existing client
+writers are unchanged.
+
+### Added
+
+- **`erebyx setup` now supports seven additional MCP clients**, each with its
+  own detection + config writer that **merges** into existing config
+  (preserving any other MCP servers / extensions the user already has):
+  - **Codex (OpenAI Codex CLI)** — TOML at `~/.codex/config.toml`
+    (`[mcp_servers."erebyx-os"]` + nested `[mcp_servers."erebyx-os".env]`).
+  - **Gemini CLI** — JSON `mcpServers` object at `~/.gemini/settings.json`.
+  - **Claude Desktop** — JSON `mcpServers` object
+    (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+    `~/.config/Claude/...` on Linux, `%APPDATA%\Claude\...` on Windows).
+  - **Cline** — JSON `mcpServers` object in the VS Code globalStorage tree
+    (`.../globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`).
+  - **Antigravity** — JSON `mcpServers` object at the shared
+    `~/.gemini/config/mcp_config.json`.
+  - **Grok Build CLI** (`@vibe-kit/grok-cli`) — JSON `mcp.servers` **array** at
+    `~/.grok/user-settings.json` (merged by server name).
+  - **Goose** (Block "codename goose") — YAML `extensions` map at
+    `~/.config/goose/config.yaml` (uses `cmd`/`envs`, not `command`/`env`).
+- **Remote-connector guidance at the end of `erebyx setup`** — a
+  "Remote connectors (add manually)" section for **ChatGPT**, the **Grok chat
+  app**, and **JetBrains AI**: point each at
+  `https://core.erebyx.com/mcp` with an `Authorization: Bearer <EREBYX_API_KEY>`
+  header (these have no local config file an installer can write).
+- **`erebyx setup --dry-run` now previews the exact per-client config snippet**
+  (the JSON object, JSON array, TOML, or YAML) that would be merged, so the
+  schema can be audited before running for real.
+
+### Changed
+
+- All new credential-bearing writers (Codex TOML, Goose YAML) reuse the same
+  atomic + `0o600` secure-write and git-working-tree refusal
+  (`EREBYX_ALLOW_GIT_TREE_CONFIG=1` to override) the existing writers enforce.
+- Codex `AGENTS.md` and Gemini CLI / Antigravity `GEMINI.md` are shared
+  user-authored guidance files, so the rules section is **appended** (marked,
+  idempotent) rather than overwriting the whole file.
+
+---
+
 ## [0.1.2] — 2026-06-05
 
 Surface-hardening release. No wire-protocol or CLI-flag breaking changes.
@@ -139,5 +184,6 @@ Confirm: `erebyx --version`
 
 ---
 
+[0.1.3]: https://github.com/ProjectErebyx/erebyx-cli/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ProjectErebyx/erebyx-cli/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ProjectErebyx/erebyx-cli/releases/tag/v0.1.1

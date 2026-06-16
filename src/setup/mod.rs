@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! `erebyx setup` — one-command memory installation for all AI coding clients.
 //!
-//! Detects installed clients (Claude Code, Cursor, Windsurf, Continue, Zed, Copilot),
-//! writes MCP server config for each, injects rules files, and installs hooks.
+//! Detects installed clients (Claude Code, Cursor, Windsurf, Continue, Zed,
+//! Copilot, Codex, Gemini CLI, Claude Desktop, Cline, Antigravity, Grok Build
+//! CLI, Goose), writes MCP server config for each, injects rules files, and
+//! installs hooks. Also prints remote-connector guidance (ChatGPT, Grok chat
+//! app, JetBrains AI) for clients with no local config file.
 
 pub mod config;
 pub mod detect;
@@ -262,7 +265,10 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     if clients.is_empty() {
         println!("  ✗ No AI clients detected.");
         println!(
-            "    Install one of: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot."
+            "    Install one of: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot,"
+        );
+        println!(
+            "    Codex, Gemini CLI, Claude Desktop, Cline, Antigravity, Grok Build CLI, Goose."
         );
         println!();
         return Ok(());
@@ -311,6 +317,28 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     }
     println!();
 
+    // Per-client config snippet preview — the EXACT MCP entry that would be
+    // merged into each client's config file (with the placeholder key). Lets a
+    // reviewer eyeball the schema per serializer (JSON object, JSON array,
+    // TOML, YAML) before running the real setup.
+    println!(
+        "  {}",
+        "Config that would be merged (placeholder key):".bold()
+    );
+    for client in &clients {
+        let snippet = config::preview_mcp_config(client, placeholder_key, &api_url);
+        println!();
+        println!(
+            "  ── {} → {}",
+            client.name.bold(),
+            client.config_path.display()
+        );
+        for line in snippet.lines() {
+            println!("      {line}");
+        }
+    }
+    println!();
+
     // Hooks summary (Claude Code specifically)
     let has_claude_code = clients
         .iter()
@@ -353,6 +381,10 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
         "  {} placeholder used wherever an API key would appear.",
         placeholder_key.dimmed()
     );
+
+    // Remote connectors are part of what `erebyx setup` surfaces — show them
+    // in the dry-run too so the preview is faithful.
+    print_remote_connectors();
     println!();
     println!("  Re-run without `--dry-run` to perform setup.");
     println!();
@@ -379,7 +411,8 @@ pub async fn run_setup(
 
     if clients.is_empty() {
         println!("{}", "  No supported AI clients detected.".yellow());
-        println!("  Supported: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot");
+        println!("  Supported: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code/Copilot,");
+        println!("             Codex, Gemini CLI, Claude Desktop, Cline, Antigravity, Grok Build CLI, Goose");
         println!("  Install one of these and run `erebyx setup` again.");
         return Ok(());
     }
@@ -662,6 +695,11 @@ pub async fn run_setup(
         "  {}",
         "Run `erebyx doctor` to verify all connections.".dimmed()
     );
+
+    // Remote MCP connectors — clients with NO local config file. They point
+    // at the hosted substrate over HTTP with a Bearer token, added by hand
+    // in each app's UI.
+    print_remote_connectors();
     println!();
 
     // CLI v0.1.2 (exit-code fix): if we attempted to configure clients but
@@ -678,6 +716,39 @@ pub async fn run_setup(
     }
 
     Ok(())
+}
+
+/// Print the "Remote connectors (add manually)" section.
+///
+/// These clients have NO local config file an installer can write — they
+/// register an MCP server through their own UI, pointing at the hosted EREBYX
+/// substrate over HTTP with a Bearer token. Listed at the end of `erebyx setup`
+/// (and the dry-run) so the user knows the manual step for each.
+fn print_remote_connectors() {
+    println!();
+    println!("  {}", "Remote connectors (add manually):".bold());
+    println!(
+        "  {}",
+        "These have no local config file — add them in each app's UI:".dimmed()
+    );
+    println!();
+    println!(
+        "    {} https://core.erebyx.com/mcp  with  Authorization: Bearer <EREBYX_API_KEY>",
+        "URL:".dimmed()
+    );
+    println!();
+    println!(
+        "    • {} — Settings → Connectors → Developer Mode → add custom connector",
+        "ChatGPT".bold()
+    );
+    println!(
+        "    • {} — add a custom MCP server / integration with the URL + Bearer header",
+        "Grok chat app".bold()
+    );
+    println!(
+        "    • {} — add an MCP server with the URL + Bearer header",
+        "JetBrains AI".bold()
+    );
 }
 
 fn make_spinner(msg: &str) -> ProgressBar {

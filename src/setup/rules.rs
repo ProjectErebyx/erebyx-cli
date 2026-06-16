@@ -64,6 +64,16 @@ pub fn write_rules_file(client: &AiClient) -> Result<PathBuf> {
     match client.kind {
         ClientKind::Windsurf => write_append_rules(client),
         ClientKind::VsCodeCopilot => write_append_rules(client),
+        // v0.1.3 — these clients use a SHARED user-authored guidance file
+        // (Codex `AGENTS.md`, Gemini CLI / Antigravity `GEMINI.md`), so we
+        // append a marked section instead of overwriting the whole file.
+        // (Gemini CLI + Antigravity also share the SAME GEMINI.md path; the
+        // append+marker path is idempotent across both.)
+        ClientKind::Codex => write_append_rules(client),
+        ClientKind::GeminiCli => write_append_rules(client),
+        ClientKind::Antigravity => write_append_rules(client),
+        // Claude Desktop, Cline, Grok, Goose get a DEDICATED erebyx-memory.md
+        // co-located with their config — standalone is fine (no user content).
         _ => write_standalone_rules(client),
     }
 }
