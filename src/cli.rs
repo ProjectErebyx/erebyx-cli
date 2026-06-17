@@ -19,7 +19,7 @@ Quickstart:
   erebyx doctor                         # verify the wiring
 
 Docs:    https://erebyx.com/core
-Issues:  https://github.com/ProjectErebyx/erebyx-cli/issues",
+Issues:  https://github.com/ProjectEREBYX/erebyx-cli/issues",
     after_help = "Run `erebyx <COMMAND> --help` for command-specific options.
 
 Most users only need:  erebyx setup  +  erebyx doctor."

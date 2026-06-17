@@ -11,7 +11,7 @@
 //! so you can see the full request shape without going through the CLI.
 //! For a typed Rust client, use the [`erebyx-sdk`] crate instead.
 //!
-//! [`erebyx-sdk`]: https://github.com/ProjectErebyx/erebyx-sdk
+//! [`erebyx-sdk`]: https://github.com/ProjectEREBYX/erebyx-sdk
 
 use serde_json::{json, Value};
 use std::env;

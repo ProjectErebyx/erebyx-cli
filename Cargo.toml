@@ -1,11 +1,11 @@
 [package]
 name = "erebyx"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.85"
 description = "Connect any MCP-capable AI to your EREBYX memory substrate. Persistent memory across every AI you use. Native CLI binary; encrypted in transit (TLS 1.3) and at rest with envelope encryption (server-held master KEK at v0.1.1); per-user zero-knowledge encryption in v0.2."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ProjectErebyx/erebyx-cli"
+repository = "https://github.com/ProjectEREBYX/erebyx-cli"
 homepage = "https://erebyx.com"
 readme = "README.md"
 keywords = ["mcp", "ai", "memory", "claude", "cli"]

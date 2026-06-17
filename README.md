@@ -4,7 +4,7 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE-2.0)
 [![Version](https://img.shields.io/crates/v/erebyx.svg)](https://crates.io/crates/erebyx)
-[![DCO](https://img.shields.io/badge/DCO-required-orange.svg)](https://github.com/ProjectErebyx/erebyx-cli/blob/main/CONTRIBUTING.md#sign-off-dco)
+[![DCO](https://img.shields.io/badge/DCO-required-orange.svg)](https://github.com/ProjectEREBYX/erebyx-cli/blob/main/CONTRIBUTING.md#sign-off-dco)
 
 ---
 
@@ -38,56 +38,54 @@ All processing — memory understanding, recall, organization, encryption — li
 
 ---
 
-## Three integration paths
-
-<table>
-<tr>
-<th>Claude Code</th>
-<th>Cursor</th>
-<th>Raw integration</th>
-</tr>
-<tr>
-<td>
+## One command, every client
 
 ```bash
-cargo install erebyx
-erebyx setup
-# Detects ~/.claude/settings.json
-# Writes MCP server entry
-# Restart Claude Code
+cargo install erebyx   # native CLI binary
+erebyx setup           # masked API-key prompt, then writes each detected client's config
 ```
 
-See the [/core setup guide](https://erebyx.com/core)
+`erebyx setup` prompts for your API key (masked), then auto-detects and configures **every MCP-capable AI on this machine** in a single pass. It's idempotent — re-run it any time you install a new client, and it merges into existing config without clobbering MCP servers you already have. Preview everything first with `erebyx setup --dry-run` (writes nothing; prints the exact config snippet for each client).
 
-</td>
-<td>
+### Auto-configured clients (13)
+
+`erebyx setup` detects and writes a local MCP server config for each of these:
+
+| Client | Config it writes |
+|---|---|
+| **Claude Code** | `~/.claude/settings.json` MCP entry **+ memory-injection hook** |
+| **Cursor** | `~/.cursor/mcp.json` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
+| **Continue** | `~/.continue/config.yaml` (or legacy `config.json`) |
+| **Zed** | `~/.config/zed/settings.json` (`context_servers`) |
+| **VS Code / Copilot** | VS Code `settings.json` (`mcp.servers`) |
+| **Codex (OpenAI Codex CLI)** | `~/.codex/config.toml` (`[mcp_servers."erebyx-os"]`) |
+| **Gemini CLI** | `~/.gemini/settings.json` |
+| **Claude Desktop** | `claude_desktop_config.json` (platform-specific path) |
+| **Cline** | VS Code globalStorage `cline_mcp_settings.json` |
+| **Antigravity** | `~/.gemini/config/mcp_config.json` |
+| **Grok Build CLI** | `~/.grok/user-settings.json` (`mcp.servers` array) |
+| **Goose** | `~/.config/goose/config.yaml` (`extensions`) |
+
+The first six shipped at v0.1.1; the last seven were added in v0.1.3. Only clients actually installed on your machine are written.
+
+### Remote connectors (manual paste)
+
+Three clients have **no local config file** an installer can write — they register an MCP server through their own UI. `erebyx setup` **prints** the exact values to paste for each:
+
+- **ChatGPT** (Settings → Connectors → Developer Mode → add custom connector)
+- **Grok chat app** (add a custom MCP server / integration)
+- **JetBrains AI** (add an MCP server)
+
+Point each at `https://core.erebyx.com/mcp` with an `Authorization: Bearer <EREBYX_API_KEY>` header.
+
+### Preview before writing
 
 ```bash
-cargo install erebyx
-erebyx setup
-# Detects .cursor/mcp.json
-# Writes MCP server entry
-# Restart Cursor
+erebyx setup --dry-run   # writes nothing; prints the per-client config snippet
 ```
 
-See the [/core setup guide](https://erebyx.com/core)
-
-</td>
-<td>
-
-```bash
-cargo install erebyx
-erebyx setup
-# Walks API key + config
-```
-
-Or call the HTTP API directly: see the [/core setup guide](https://erebyx.com/core)
-
-</td>
-</tr>
-</table>
-
-`erebyx setup` auto-detects: Claude Code, Cursor, Windsurf, Continue, Zed, VS Code / Copilot.
+`--dry-run` makes no HTTP calls and touches no files — it renders the exact JSON object, JSON array, TOML, or YAML that would be merged into each detected client (plus the remote-connector section), so you can audit the schema first.
 
 ### What `erebyx setup` writes
 
@@ -153,7 +151,7 @@ Hint values:
 - `load_context_recommended` — retrieval scores trending low
 - `compact_imminent` — sustained save volume; consolidate before context fills
 
-Honoring hints is optional. Disable globally with `EREBYX_HINTS_DISABLED=1`. Full hint protocol at [DEV_QUICKSTART.md](https://github.com/ProjectErebyx/erebyx-cli/blob/main/DEV_QUICKSTART.md#x-erebyx-hint--lifecycle-signals).
+Honoring hints is optional. Disable globally with `EREBYX_HINTS_DISABLED=1`. Full hint protocol at [DEV_QUICKSTART.md](https://github.com/ProjectEREBYX/erebyx-cli/blob/main/DEV_QUICKSTART.md#x-erebyx-hint--lifecycle-signals).
 
 ---
 
@@ -240,7 +238,7 @@ cargo install erebyx --force
 ## Build from source
 
 ```bash
-git clone https://github.com/ProjectErebyx/erebyx-cli.git
+git clone https://github.com/ProjectEREBYX/erebyx-cli.git
 cd erebyx-cli
 cargo build --release
 # Binary lands at target/release/erebyx
@@ -250,16 +248,16 @@ cargo build --release
 
 ## See also
 
-- [`erebyx-sdk`](https://github.com/ProjectErebyx/erebyx-sdk) — Rust SDK (type-safe substrate client)
-- [`@erebyx/sdk`](https://github.com/ProjectErebyx/erebyx-sdk-node) — Node.js / TypeScript SDK
+- [`erebyx-sdk`](https://github.com/ProjectEREBYX/erebyx-sdk) — Rust SDK (type-safe substrate client)
+- [`@erebyx/sdk`](https://github.com/ProjectEREBYX/erebyx-sdk-node) — Node.js / TypeScript SDK
 - [EREBYX Core docs](https://erebyx.com/core)
-- [Per-harness integration examples](https://erebyx.com/core) — 11 harnesses, copy-paste integration
+- [Per-harness integration examples](https://erebyx.com/core) — 13 auto-configured clients, copy-paste integration
 
 ---
 
 ## Contributing
 
-Pull requests welcome. DCO sign-off required (`git commit -s`). See [CONTRIBUTING.md](https://github.com/ProjectErebyx/erebyx-cli/blob/main/CONTRIBUTING.md).
+Pull requests welcome. DCO sign-off required (`git commit -s`). See [CONTRIBUTING.md](https://github.com/ProjectEREBYX/erebyx-cli/blob/main/CONTRIBUTING.md).
 
 ## Security
 

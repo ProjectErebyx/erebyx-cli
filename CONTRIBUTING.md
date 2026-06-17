@@ -23,7 +23,7 @@ The DCO bot will block PRs without sign-off.
 ## Local dev setup
 
 ```bash
-git clone https://github.com/ProjectErebyx/erebyx-cli.git
+git clone https://github.com/ProjectEREBYX/erebyx-cli.git
 cd erebyx-cli
 cargo build
 cargo test
@@ -89,7 +89,7 @@ Out of scope: anything that would require a substrate change. File those as issu
 
 ## Bug reports
 
-Open a [GitHub Issue](https://github.com/ProjectErebyx/erebyx-cli/issues). Include:
+Open a [GitHub Issue](https://github.com/ProjectEREBYX/erebyx-cli/issues). Include:
 
 - `erebyx --version`
 - `erebyx doctor` output

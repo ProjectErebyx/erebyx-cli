@@ -8,6 +8,36 @@ Substrate-side release notes are summarized at [erebyx.com/core](https://erebyx.
 
 ---
 
+## [0.1.4] — 2026-06-16
+
+Docs-and-metadata release. **No setup or runtime behavior changed** — the
+`erebyx setup` writers, detection logic, and wire protocol are byte-for-byte
+identical to 0.1.3. This release only corrects documentation and dead links.
+
+### Fixed
+
+- **README client roster was stale** — it still listed only the original six
+  clients and a "Three integration paths" layout. Rewritten to document all
+  **13 auto-configured clients** (the original six + the seven added in 0.1.3),
+  the three **remote connectors** (ChatGPT, Grok chat app, JetBrains AI) that
+  `erebyx setup` prints for manual paste, and the `erebyx setup --dry-run`
+  preview. Every client-count reference now reads 13 (the stale "11 harnesses"
+  line is reconciled).
+- **Dead status-page link in error output** — the 5xx error message pointed at
+  `https://status.erebyx.com`, whose origin is down (HTTP 520). It now points at
+  the GitHub issues tracker
+  (`https://github.com/ProjectEREBYX/erebyx-cli/issues`), the same actionable
+  surface the rest of the CLI already uses.
+- **Stale Zed documentation links** — two `https://zed.dev/docs/ai/rules` /
+  `https://zed.dev/docs/extensions/slash-commands` comment references in
+  `setup/detect.rs` now 404; repointed to the current working Zed docs
+  (`ai/configuration` and `extensions/context-servers`).
+- **GitHub org casing** — `ProjectErebyx` → `ProjectEREBYX` in all repository
+  URLs/hrefs across the README and docs (GitHub is case-insensitive, so links
+  still resolve; the repo slug after the org is unchanged).
+
+---
+
 ## [0.1.3] — 2026-06-16
 
 Client-coverage release. `erebyx setup` now detects and configures seven more
@@ -184,6 +214,7 @@ Confirm: `erebyx --version`
 
 ---
 
-[0.1.3]: https://github.com/ProjectErebyx/erebyx-cli/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/ProjectErebyx/erebyx-cli/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/ProjectErebyx/erebyx-cli/releases/tag/v0.1.1
+[0.1.4]: https://github.com/ProjectEREBYX/erebyx-cli/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/ProjectEREBYX/erebyx-cli/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/ProjectEREBYX/erebyx-cli/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/ProjectEREBYX/erebyx-cli/releases/tag/v0.1.1

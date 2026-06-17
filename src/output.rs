@@ -176,8 +176,8 @@ pub fn map_actionable_error(raw: &str) -> String {
     // EREBYX_VERBOSE so an operator debugging an incident can still see it.
     if raw.contains("500") || raw.contains("502") || raw.contains("503") || raw.contains("504") {
         let base =
-            "EREBYX server error. Try again in a few seconds; if it persists, check status.\n\
-             Status: https://status.erebyx.com";
+            "EREBYX server error. Try again in a few seconds; if it persists, report it.\n\
+             Issues: https://github.com/ProjectEREBYX/erebyx-cli/issues";
         if verbose_errors_enabled() {
             return format!("{base}\nOriginal error: {raw}");
         }
@@ -341,10 +341,10 @@ mod tests {
     }
 
     #[test]
-    fn maps_5xx_to_status_page_pointer() {
+    fn maps_5xx_to_issues_pointer() {
         let mapped = map_actionable_error("Server error: 503 Service Unavailable");
         assert!(mapped.contains("server error"));
-        assert!(mapped.contains("status.erebyx.com"));
+        assert!(mapped.contains("github.com/ProjectEREBYX/erebyx-cli/issues"));
     }
 
     /// CLI v0.1.2 fix [17]: the raw server 5xx body must NOT appear in the
@@ -358,7 +358,7 @@ mod tests {
         std::env::remove_var("EREBYX_VERBOSE");
         let raw = "Server returned HTTP 500: <html>internal stack trace blah blah</html>";
         let mapped = super::map_actionable_error(raw);
-        assert!(mapped.contains("status.erebyx.com"));
+        assert!(mapped.contains("github.com/ProjectEREBYX/erebyx-cli/issues"));
         assert!(
             !mapped.contains("stack trace") && !mapped.contains("<html>"),
             "raw 5xx body must be dropped from the default message, got: {mapped}"

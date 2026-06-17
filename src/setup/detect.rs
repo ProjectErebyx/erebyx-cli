@@ -142,8 +142,8 @@ pub fn detect_clients() -> Vec<AiClient> {
 
     // Zed: ~/.config/zed/ directory.
     // Rules path corrected 2026-05-27: Zed's prompt library lives at
-    // ~/.config/zed/prompts/ (per https://zed.dev/docs/ai/rules and
-    // https://zed.dev/docs/extensions/slash-commands). The earlier path
+    // ~/.config/zed/prompts/ (per https://zed.dev/docs/ai/configuration and
+    // https://zed.dev/docs/extensions/context-servers). The earlier path
     // ~/.config/zed/rules/ was wishful-thinking — Zed wrote files there
     // and silently never read them. Affected users: any Zed install that
     // ran `erebyx setup` before this fix shipped.
