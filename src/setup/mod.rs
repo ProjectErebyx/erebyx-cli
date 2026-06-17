@@ -78,7 +78,7 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
             .unwrap_or(0)
     );
 
-    // Brutal-review wave-2 (2026-05-27): cap response bodies at 10 MiB
+    // Cap response bodies at 10 MiB
     // before deserialization. The sibling `run_hook_inject` already does
     // this; the dynamic-context path was added later and shipped without.
     // A malicious or buggy substrate response would OOM a small setup
@@ -789,7 +789,7 @@ mod dynamic_block_tests {
         let ctx = json!({
             "handoff": {
                 "what_we_built": "ship session-start pre-injection",
-                "whats_next": "brutal-review wave 2 + fix forward",
+                "whats_next": "follow-up review + fix forward",
             },
             "anchors": ["launch-prep", "cli"],
         });

@@ -1,4 +1,4 @@
-<!-- Canonical PR template for the Erebyx public client surface. -->
+<!-- Canonical PR template for the EREBYX public client surface. -->
 
 ## Summary
 
@@ -7,10 +7,10 @@
 ## Scope
 
 - [ ] Thin-client surface only (HTTP + auth + serialization)
-- [ ] No imports from non-public Erebyx modules
+- [ ] No imports from non-public EREBYX modules
 - [ ] No direct database access (all data flows through the documented HTTP API)
 
-> **Why this matters**: this repo is a public client carve-out for the Erebyx
+> **Why this matters**: this repo is a public client carve-out for the EREBYX
 > substrate. The substrate itself is closed-source. Keep client code focused on
 > wire protocol + ergonomics; substrate behavior lives behind the API and is
 > not implemented here.
@@ -34,4 +34,4 @@
 
 ---
 
-Built with [Erebyx](https://erebyx.com).
+Built with [EREBYX](https://erebyx.com).

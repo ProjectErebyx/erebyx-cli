@@ -19,8 +19,7 @@ async fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli).await {
-        // Brutal-review wave-2 (Genesis Arche T-5 days, 2026-05-27):
-        // promote ``erebyx doctor``'s actionable-error pattern to every
+        // Promote ``erebyx doctor``'s actionable-error pattern to every
         // command. Pre-fix the raw ``anyhow`` chain dumped here on any
         // save/remember/wrap-up failure — first-touch developers hit a
         // wall of ``Server error: 401 ...`` text and bounced. Now we
@@ -602,7 +601,7 @@ async fn mcp_serve() -> Result<()> {
             continue;
         }
 
-        // P0-B (2026-05-27, brutal-review POSTFIX_CLI): when the line
+        // When the line
         // fails to parse as JSON, JSON-RPC 2.0 §5.1 mandates a local
         // Parse error response with code -32700 — NOT a round-trip to
         // the substrate. The prior code sent the garbage upstream as
@@ -671,7 +670,7 @@ async fn mcp_serve() -> Result<()> {
 
 /// Serialize + emit a JSON-RPC value to stdout with newline + flush.
 ///
-/// **P1-G (brutal-review POSTFIX_CLI, 2026-05-27):** stdout writes
+/// stdout writes
 /// previously used `?`-propagation, which surfaced `BrokenPipe` as a
 /// non-zero exit. For a stdio bridge, BrokenPipe means the MCP client
 /// (Claude Code) has terminated — that's a clean shutdown signal, not
@@ -896,7 +895,7 @@ async fn run_hook_inject() -> String {
 
     // Read hook input from stdin with a hard 1 MiB cap.
     //
-    // Brutal-review wave-2 (2026-05-27) finding: a malicious or
+    // A malicious or
     // misconfigured Claude Code build (or pipe-redirection misuse)
     // feeding gigabytes of stdin would OOM the binary before the 500ms
     // HTTP timeout ever fires. Real UserPromptSubmit payloads are

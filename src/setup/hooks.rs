@@ -121,7 +121,7 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
     // error signal. v0.1.2 will ship the PowerShell variant; v0.1.1 punts
     // cleanly with a clear message so the customer knows what landed and
     // what didn't.
-    // Brutal-review wave-2 (2026-05-27 CLI lane): SessionStart hook is
+    // SessionStart hook is
     // pure settings.json JSON mutation — it works fine on Windows. Only
     // the UserPromptSubmit bash script (`.sh`) is Unix-only. Splitting
     // the two registrations so SessionStart pre-injection still works
@@ -423,9 +423,8 @@ fn value_type_name(v: &serde_json::Value) -> &'static str {
 /// REMOVED before registering our managed matcher-group?
 ///
 /// Extracted from `register_hook_in_settings` so the precision contract can
-/// be tested directly. P1-5 (brutal-review POSTFIX_CLI CC-1) said "hook
-/// retention filter is a pure-function pass over a JSON array. Testable. Add
-/// tests."
+/// be tested directly: the hook retention filter is a pure-function pass over
+/// a JSON array, so it is independently testable.
 ///
 /// Post-[1], our entry is a matcher-GROUP `{hooks:[…], _erebyx_managed:true}`
 /// and the marker lives on the group. This predicate matches:

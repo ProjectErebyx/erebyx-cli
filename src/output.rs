@@ -100,8 +100,7 @@ pub fn print_error(msg: &str) {
 /// "here's what's wrong, here's how to fix it" message and only
 /// falls through to the raw chain when no class matches.
 ///
-/// Brutal-review wave-2 (Genesis Arche T-5 days, 2026-05-27) flagged
-/// the raw-chain dump as a first-touch papercut that would cause
+/// The raw-chain dump was a first-touch papercut that would cause
 /// developers to bounce on their first failed call.
 /// True when the caller has opted into verbose error output — used to gate
 /// echoing raw server bodies (CLI v0.1.2 fix [17]). Honors a non-empty

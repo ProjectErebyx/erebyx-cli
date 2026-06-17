@@ -240,7 +240,7 @@ mod tests {
     /// prompt on EVERY conversation in EVERY configured client. This test
     /// uses a chars/4 heuristic that approximates cl100k_base.
     ///
-    /// Measured 2026-05-27 LATE (brutal-review wave-2):
+    /// Measured 2026-05-27:
     ///   chars: 1945, char-proxy estimate: 486, real cl100k_base: 431
     ///   ratio: cl100k ≈ 89% of char-proxy
     ///

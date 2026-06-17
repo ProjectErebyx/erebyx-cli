@@ -258,7 +258,7 @@ fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Res
 
 /// Continue YAML — current format. Top-level `mcpServers`, no nesting.
 fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
-    // P0 (brutal-review wave-2 2026-05-27 CLI lane): apply the SAME
+    // Apply the SAME
     // git-tree credential guard the JSON path enforces. Continue users
     // frequently sync `~/.continue/` to public dotfiles repos; without
     // this guard, the YAML writer would silently leak the API key on
@@ -272,7 +272,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
         );
     }
 
-    // P0 (brutal-review wave-2): YAML-escape api_key + api_url before
+    // YAML-escape api_key + api_url before
     // raw interpolation into the double-quoted YAML string. Real EREBYX
     // keys are alphanumeric (`erebyx_<48 hex>`), but the contract isn't
     // validated upstream — a key with `"` or `\` would silently produce
@@ -297,7 +297,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     // If a top-level `mcpServers:` block exists, append our entry under
     // it. Otherwise, add the block at the end.
     //
-    // P1 (brutal-review wave-2): the `\nmcpServers:` heuristic matches
+    // The `\nmcpServers:` heuristic matches
     // any line starting with `mcpServers:` — INCLUDING commented-out
     // lines (`# mcpServers:`). Tighten by requiring the byte preceding
     // `\n` is also the start of a "real" line (not after `# `). Cheap
@@ -789,7 +789,7 @@ fn read_json_or_empty(path: &PathBuf) -> Result<Value> {
 /// True if `path` lives inside a git working tree we should refuse to
 /// write a credential into.
 ///
-/// **Brutal-review POSTFIX_CLI P0-A (2026-05-27):** the prior
+/// The prior
 /// implementation walked the literal ancestors and matched any `.git`
 /// existence — three problems:
 ///
@@ -855,7 +855,7 @@ pub(super) fn is_within_git_tree(path: &std::path::Path) -> bool {
 /// (`"1" | "true" | "yes"`, case-insensitive, trimmed). Matches the
 /// substrate's canonical pattern.
 ///
-/// **Brutal-review POSTFIX_CLI P1-A:** the prior `is_err()`-only check
+/// The prior `is_err()`-only check
 /// treated `EREBYX_ALLOW_GIT_TREE_CONFIG=0` as a bypass — opposite of
 /// what the user expects. This helper enforces the strict allowlist
 /// across all CLI env-var toggles.
