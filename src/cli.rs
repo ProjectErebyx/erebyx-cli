@@ -56,8 +56,16 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         anchors: Option<Vec<String>>,
 
-        /// Context loading mode
+        /// Deterministic fetch plan: auto, boot, work, rules, identity, relationship, skill, or deep
         #[arg(long, value_enum)]
+        loadout: Option<ContextLoadout>,
+
+        /// Output detail for loaded context
+        #[arg(long, value_enum)]
+        detail: Option<LoadContextDetail>,
+
+        /// Deprecated legacy loading mode; prefer --loadout
+        #[arg(long, value_enum, hide = true)]
         mode: Option<ContextMode>,
     },
 
@@ -82,8 +90,8 @@ pub enum Commands {
         #[arg(long)]
         importance: Option<f64>,
 
-        /// Memory type classification
-        #[arg(long, value_enum, name = "type")]
+        /// Deprecated internal route selector; use --category identity|experience|knowledge
+        #[arg(long, value_enum, name = "type", hide = true)]
         memory_type: Option<MemoryType>,
     },
 
@@ -108,12 +116,12 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         ids: Option<Vec<String>>,
 
-        /// Generative recall mode
-        #[arg(long, value_enum)]
+        /// Deprecated internal recall mode
+        #[arg(long, value_enum, hide = true)]
         generative: Option<GenerativeMode>,
 
-        /// Comma-separated memory types to filter
-        #[arg(long, value_delimiter = ',')]
+        /// Deprecated internal memory-type filter
+        #[arg(long, value_delimiter = ',', hide = true)]
         types: Option<Vec<String>>,
     },
 
@@ -155,6 +163,10 @@ pub enum Commands {
         /// API URL override (default: https://core.erebyx.com)
         #[arg(long)]
         api_url: Option<String>,
+
+        /// Instance ID to write into generated MCP configs (default: EREBYX_INSTANCE_ID or "default")
+        #[arg(long)]
+        instance_id: Option<String>,
 
         /// Preview without writing — show every file setup would touch
         /// and every config merge it would perform, then exit. Nothing
@@ -220,6 +232,24 @@ pub enum ContextMode {
 }
 
 #[derive(Clone, ValueEnum)]
+pub enum ContextLoadout {
+    Auto,
+    Boot,
+    Work,
+    Rules,
+    Identity,
+    Relationship,
+    Skill,
+    Deep,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum LoadContextDetail {
+    Summary,
+    Full,
+}
+
+#[derive(Clone, ValueEnum)]
 pub enum MemoryType {
     Memory,
     Skill,
@@ -257,6 +287,30 @@ impl std::fmt::Display for ContextMode {
         match self {
             ContextMode::Session => write!(f, "session"),
             ContextMode::Specialization => write!(f, "specialization"),
+        }
+    }
+}
+
+impl std::fmt::Display for ContextLoadout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContextLoadout::Auto => write!(f, "auto"),
+            ContextLoadout::Boot => write!(f, "boot"),
+            ContextLoadout::Work => write!(f, "work"),
+            ContextLoadout::Rules => write!(f, "rules"),
+            ContextLoadout::Identity => write!(f, "identity"),
+            ContextLoadout::Relationship => write!(f, "relationship"),
+            ContextLoadout::Skill => write!(f, "skill"),
+            ContextLoadout::Deep => write!(f, "deep"),
+        }
+    }
+}
+
+impl std::fmt::Display for LoadContextDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadContextDetail::Summary => write!(f, "summary"),
+            LoadContextDetail::Full => write!(f, "full"),
         }
     }
 }

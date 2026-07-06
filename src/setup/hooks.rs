@@ -54,9 +54,10 @@ fn shell_single_quote(value: &str) -> String {
 /// interpolated `api_url` unquoted into the default word, where a value like
 /// `}$(...)` would close the parameter expansion and run a command
 /// substitution at hook-fire time.
-fn hook_script(api_url: &str) -> String {
+fn hook_script(api_url: &str, instance_id: &str) -> String {
     // Single-quoted literal — already includes the surrounding quotes.
     let quoted_default = shell_single_quote(api_url);
+    let quoted_instance = shell_single_quote(instance_id);
     // Absolute, symlink-resolved path of the running binary, single-quoted so
     // a path containing spaces or shell metacharacters lands as inert data.
     // GUI-launched Claude Code often runs with a minimal $PATH that doesn't
@@ -87,17 +88,30 @@ if [ -z "${{EREBYX_API_URL}}" ]; then
     export EREBYX_API_URL={quoted_default}
 fi
 
+# Honor an inherited EREBYX_INSTANCE_ID; otherwise use the setup-selected
+# instance slice. This keeps hook preload, MCP config, and CLI calls aligned.
+export EREBYX_INSTANCE_ID="${{EREBYX_INSTANCE_ID:-}}"
+if [ -z "${{EREBYX_INSTANCE_ID}}" ]; then
+    export EREBYX_INSTANCE_ID={quoted_instance}
+fi
+
 # Single native call via the absolute binary path (single-quoted literal).
 # If it fails for any reason, emit {{}} and exit clean.
 exec {quoted_exe} hook-inject 2>/dev/null || printf '%s' '{{}}'
 "#,
         quoted_default = quoted_default,
+        quoted_instance = quoted_instance,
         quoted_exe = quoted_exe,
     )
 }
 
 /// Install Claude Code hooks for automatic memory injection.
-pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result<()> {
+pub fn install_hooks(
+    client: &AiClient,
+    _api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<()> {
     // P0-2 / P1-4: refuse to bake an unsafe URL into the generated hook
     // script. `is_safe_url` accepts HTTPS or localhost only — anything else
     // (plain http:// to the internet, or an injection payload containing
@@ -157,7 +171,7 @@ pub fn install_hooks(client: &AiClient, _api_key: &str, api_url: &str) -> Result
     ensure_dir_secure(&hooks_dir)?;
 
     let script_path = hooks_dir.join("erebyx-memory-injector.sh");
-    let script_content = hook_script(api_url);
+    let script_content = hook_script(api_url, instance_id);
     std::fs::write(&script_path, &script_content)
         .with_context(|| format!("Failed to write hook script: {}", script_path.display()))?;
 
@@ -800,7 +814,7 @@ mod tests {
     /// `current_exe` resolves, so the path is absolute.
     #[test]
     fn hook_script_exec_line_uses_absolute_quoted_path() {
-        let script = hook_script("https://core.erebyx.com");
+        let script = hook_script("https://core.erebyx.com", "studio-ai");
         let expected_exe = shell_single_quote(&erebyx_command());
         assert!(
             script.contains(&format!("exec {expected_exe} hook-inject")),
@@ -810,6 +824,22 @@ mod tests {
         assert!(
             !script.contains("exec erebyx hook-inject"),
             "bare `exec erebyx hook-inject` (relies on $PATH) must be gone. Script:\n{script}"
+        );
+    }
+
+    #[test]
+    fn hook_script_defaults_to_setup_instance_id() {
+        let script = hook_script("https://core.erebyx.com", "studio ai's");
+        assert!(
+            script.contains("export EREBYX_INSTANCE_ID=\"${EREBYX_INSTANCE_ID:-}\""),
+            "script must honor an inherited instance id first. Script:\n{script}"
+        );
+        assert!(
+            script.contains(&format!(
+                "export EREBYX_INSTANCE_ID={}",
+                shell_single_quote("studio ai's")
+            )),
+            "script must emit the setup-selected instance as an inert shell literal. Script:\n{script}"
         );
     }
 
@@ -942,7 +972,7 @@ mod tests {
     #[test]
     fn hook_script_neutralizes_command_substitution_payload() {
         let payload = r#"http://evil}$(touch /tmp/erebyx_pwn)"#;
-        let script = hook_script(payload);
+        let script = hook_script(payload, "studio-ai");
         // The dangerous payload must appear ONLY inside its single-quoted
         // literal. Concretely: the `$(` must be immediately preceded by
         // characters that keep it inside the single-quote run — i.e. there
@@ -968,7 +998,7 @@ mod tests {
     #[test]
     fn hook_script_neutralizes_backtick_payload() {
         let payload = "https://x`id`y";
-        let script = hook_script(payload);
+        let script = hook_script(payload, "studio-ai");
         // The only occurrence of the backtick payload is inside the
         // single-quoted export line.
         let expected_line = format!("export EREBYX_API_URL={}", shell_single_quote(payload));
@@ -1025,7 +1055,7 @@ mod tests {
         // NOT as a live `${EREBYX_API_URL:-...}` default-expansion. Against
         // the ORIGINAL hooks.rs this assertion FAILS — the payload landed in
         // `${EREBYX_API_URL:-https://evil}$(...)` and `}` + `$(...)` executed.
-        let script = hook_script(payload);
+        let script = hook_script(payload, "studio-ai");
         assert!(
             script.contains(&format!(
                 "export EREBYX_API_URL={}",

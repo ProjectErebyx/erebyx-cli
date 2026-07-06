@@ -561,16 +561,20 @@ fn goose_yaml_has_erebyx(content: &str, server_key: &str) -> bool {
 mod detect_tests {
     use super::*;
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static DETECT_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Write `content` to a temp file with the given extension and run
     /// `has_erebyx_mcp_config` against it for `kind`.
     fn detect_in(content: &str, ext: &str, kind: &ClientKind) -> bool {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "erebyx-detect-test-{}-{}.{}",
+            "erebyx-detect-test-{}-{}-{}.{}",
             std::process::id(),
             // cheap unique-ish suffix
             content.len(),
+            DETECT_TEST_COUNTER.fetch_add(1, Ordering::Relaxed),
             ext
         ));
         {

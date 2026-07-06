@@ -8,6 +8,36 @@ Substrate-side release notes are summarized at [erebyx.com/core](https://erebyx.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `erebyx load-context` now exposes deterministic `--loadout` selection
+  (`auto`, `boot`, `work`, `rules`, `identity`, `relationship`, `skill`,
+  `deep`) plus `--detail summary|full`, matching the substrate fetch-plan
+  contract.
+- `erebyx setup --instance-id <id>` writes the selected instance into generated
+  MCP configs, Claude Code hook defaults, dry-run previews, install-time boot
+  preload calls, and remote-connector guidance.
+
+### Changed
+
+- `erebyx setup` now preloads dynamic rules context through the cheap `boot`
+  loadout and prints remote connector values from the resolved API URL and
+  instance ID.
+- Legacy/internal save and remember route-selector flags remain accepted for
+  compatibility, but are hidden from generated CLI help so the public surface
+  stays focused on categories, loadouts, and lifecycle verbs.
+
+### Fixed
+
+- Parallel detection tests now use unique temp config paths, avoiding flaky
+  cross-test file clobbering.
+- Cargo.lock updates clear current RustSec advisories for `anyhow`,
+  `quinn-proto`, and `rand` while preserving the declared MSRV build.
+
+---
+
 ## [0.1.4] — 2026-06-16
 
 Docs-and-metadata release. **No setup or runtime behavior changed** — the

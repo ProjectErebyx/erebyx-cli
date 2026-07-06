@@ -14,7 +14,7 @@
 cargo install erebyx                  # native CLI binary
 export EREBYX_API_KEY="<YOUR_API_KEY>"    # get one at https://app.erebyx.com/keys
 erebyx setup                          # auto-detects every MCP-capable AI on your machine
-erebyx save "Anchor-based retrieval improves recall by 40%" --category insight
+erebyx save "Anchor-based retrieval improves recall by 40%" --category knowledge
 erebyx remember "anchor retrieval"
 ```
 
@@ -45,7 +45,7 @@ cargo install erebyx   # native CLI binary
 erebyx setup           # masked API-key prompt, then writes each detected client's config
 ```
 
-`erebyx setup` prompts for your API key (masked), then auto-detects and configures **every MCP-capable AI on this machine** in a single pass. It's idempotent — re-run it any time you install a new client, and it merges into existing config without clobbering MCP servers you already have. Preview everything first with `erebyx setup --dry-run` (writes nothing; prints the exact config snippet for each client).
+`erebyx setup` prompts for your API key (masked), then auto-detects and configures **every MCP-capable AI on this machine** in a single pass. It's idempotent — re-run it any time you install a new client, and it merges into existing config without clobbering MCP servers you already have. Preview everything first with `erebyx setup --dry-run` (writes nothing; prints the exact config snippet for each client). Use `--instance-id <id>` when this machine or AI should attach to a non-default instance slice.
 
 ### Auto-configured clients (13)
 
@@ -77,15 +77,15 @@ Three clients have **no local config file** an installer can write — they regi
 - **Grok chat app** (add a custom MCP server / integration)
 - **JetBrains AI** (add an MCP server)
 
-Point each at `https://core.erebyx.com/mcp` with an `Authorization: Bearer <EREBYX_API_KEY>` header.
+Point each at `https://core.erebyx.com/mcp` with an `Authorization: Bearer <EREBYX_API_KEY>` header. Add `X-Instance-ID: <your-instance>` when you use a non-default instance.
 
 ### Preview before writing
 
 ```bash
-erebyx setup --dry-run   # writes nothing; prints the per-client config snippet
+erebyx setup --dry-run --instance-id my-laptop   # writes nothing; prints the per-client config snippet
 ```
 
-`--dry-run` makes no HTTP calls and touches no files — it renders the exact JSON object, JSON array, TOML, or YAML that would be merged into each detected client (plus the remote-connector section), so you can audit the schema first.
+`--dry-run` makes no HTTP calls and touches no files — it renders the exact JSON object, JSON array, TOML, or YAML that would be merged into each detected client (plus the resolved instance ID and remote-connector section), so you can audit the schema first.
 
 ### What `erebyx setup` writes
 
@@ -100,7 +100,7 @@ For every detected client, the setup writer drops an MCP server entry pointing a
       "env": {
         "EREBYX_API_KEY": "<YOUR_API_KEY>",
         "EREBYX_API_URL": "https://core.erebyx.com",
-        "EREBYX_INSTANCE_ID": "default"
+        "EREBYX_INSTANCE_ID": "my-laptop"
       }
     }
   }
@@ -161,13 +161,14 @@ Honoring hints is optional. Disable globally with `EREBYX_HINTS_DISABLED=1`. Ful
 ```bash
 erebyx restore-identity                          # baseline
 erebyx restore-identity --limit 5 --detail full  # rich identity load
-erebyx load-context --anchors trading,coding     # filter by domain
+erebyx load-context --loadout boot               # cheap handoff + rules restore
+erebyx load-context --anchors trading,coding --loadout work  # domain work context
 ```
 
 ### During a session
 ```bash
 erebyx save "Discovered anchor-based retrieval improves recall by 40%" \
-  --category insight \
+  --category knowledge \
   --title "Anchor Retrieval Improvement" \
   --anchors memory,retrieval \
   --importance 0.9

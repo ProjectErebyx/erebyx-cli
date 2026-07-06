@@ -21,29 +21,36 @@ use secure_write::{atomic_write_secret, erebyx_command};
 
 /// Write MCP server configuration for a specific client.
 /// Returns the path where config was written.
-pub fn write_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+pub fn write_mcp_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     // Ensure parent directory exists (0o700 on Unix when we create it).
     if let Some(parent) = client.config_path.parent() {
         secure_write::ensure_dir_secure(parent)?;
     }
 
     match client.kind {
-        ClientKind::ClaudeCode => write_claude_code_config(client, api_key, api_url),
-        ClientKind::Cursor => write_standard_mcp_config(client, api_key, api_url),
-        ClientKind::Windsurf => write_standard_mcp_config(client, api_key, api_url),
-        ClientKind::Continue => write_continue_config(client, api_key, api_url),
-        ClientKind::Zed => write_zed_config(client, api_key, api_url),
-        ClientKind::VsCodeCopilot => write_vscode_config(client, api_key, api_url),
+        ClientKind::ClaudeCode => write_claude_code_config(client, api_key, api_url, instance_id),
+        ClientKind::Cursor => write_standard_mcp_config(client, api_key, api_url, instance_id),
+        ClientKind::Windsurf => write_standard_mcp_config(client, api_key, api_url, instance_id),
+        ClientKind::Continue => write_continue_config(client, api_key, api_url, instance_id),
+        ClientKind::Zed => write_zed_config(client, api_key, api_url, instance_id),
+        ClientKind::VsCodeCopilot => write_vscode_config(client, api_key, api_url, instance_id),
         // v0.1.3 — JSON `mcpServers`-object family (only the path differs from
         // Cursor/Windsurf). Merge-preserves any other MCP servers the user has.
         ClientKind::GeminiCli
         | ClientKind::ClaudeDesktop
         | ClientKind::Cline
-        | ClientKind::Antigravity => write_standard_mcp_config(client, api_key, api_url),
+        | ClientKind::Antigravity => {
+            write_standard_mcp_config(client, api_key, api_url, instance_id)
+        }
         // v0.1.3 — distinct serializer families.
-        ClientKind::Codex => write_codex_config(client, api_key, api_url),
-        ClientKind::GrokCli => write_grok_config(client, api_key, api_url),
-        ClientKind::Goose => write_goose_config(client, api_key, api_url),
+        ClientKind::Codex => write_codex_config(client, api_key, api_url, instance_id),
+        ClientKind::GrokCli => write_grok_config(client, api_key, api_url, instance_id),
+        ClientKind::Goose => write_goose_config(client, api_key, api_url, instance_id),
     }
 }
 
@@ -52,7 +59,12 @@ pub fn write_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> Resu
 /// run offline and is the schema reviewers see in dry-run output. The real
 /// writer merges this into the user's existing file (preserving other servers);
 /// this preview shows the erebyx contribution in isolation.
-pub fn preview_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> String {
+pub fn preview_mcp_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> String {
     match client.kind {
         // JSON `mcpServers`-object family.
         ClientKind::ClaudeCode
@@ -62,7 +74,7 @@ pub fn preview_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> St
         | ClientKind::ClaudeDesktop
         | ClientKind::Cline
         | ClientKind::Antigravity => {
-            let v = json!({ "mcpServers": { "erebyx-os": erebyx_server_entry(api_key, api_url) } });
+            let v = json!({ "mcpServers": { "erebyx-os": erebyx_server_entry(api_key, api_url, instance_id) } });
             serde_json::to_string_pretty(&v).unwrap_or_default()
         }
         ClientKind::Continue => {
@@ -74,27 +86,28 @@ pub fn preview_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> St
                 .unwrap_or(true);
             if is_yaml {
                 let entry = format!(
-                    "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: \"default\"\n",
+                    "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: {instance}\n",
                     cmd = erebyx_command(),
                     key = yaml_dq_string(api_key),
                     url = yaml_dq_string(api_url),
+                    instance = yaml_dq_string(instance_id),
                 );
                 format!("# EREBYX-START\nmcpServers:\n{entry}# EREBYX-END")
             } else {
-                let v = json!({ "experimental": { "mcpServers": { "erebyx-os": erebyx_server_entry(api_key, api_url) } } });
+                let v = json!({ "experimental": { "mcpServers": { "erebyx-os": erebyx_server_entry(api_key, api_url, instance_id) } } });
                 serde_json::to_string_pretty(&v).unwrap_or_default()
             }
         }
         ClientKind::Zed => {
             let v = json!({ "context_servers": { "erebyx-os": {
                 "command": { "path": erebyx_command(), "args": ["mcp-serve"], "env": {
-                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": "default" } } } } });
+                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": instance_id } } } } });
             serde_json::to_string_pretty(&v).unwrap_or_default()
         }
         ClientKind::VsCodeCopilot => {
             let v = json!({ "mcp": { "servers": { "erebyx-os": {
                 "type": "stdio", "command": erebyx_command(), "args": ["mcp-serve"], "env": {
-                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": "default" } } } } });
+                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": instance_id } } } } });
             serde_json::to_string_pretty(&v).unwrap_or_default()
         }
         ClientKind::Codex => {
@@ -105,23 +118,24 @@ pub fn preview_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> St
                 arg = toml_basic_string("mcp-serve"),
                 key = toml_basic_string(api_key),
                 url = toml_basic_string(api_url),
-                inst = toml_basic_string("default"),
+                inst = toml_basic_string(instance_id),
             )
         }
         ClientKind::GrokCli => {
             let v = json!({ "mcp": { "servers": [ {
                 "id": "erebyx-os", "label": "erebyx-os", "enabled": true, "transport": "stdio",
                 "command": erebyx_command(), "args": ["mcp-serve"], "env": {
-                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": "default" } } ] } });
+                    "EREBYX_API_KEY": api_key, "EREBYX_API_URL": api_url, "EREBYX_INSTANCE_ID": instance_id } } ] } });
             serde_json::to_string_pretty(&v).unwrap_or_default()
         }
         ClientKind::Goose => {
             let cmd = erebyx_command();
             let entry = format!(
-                "  erebyx-os:\n    type: stdio\n    name: erebyx-os\n    enabled: true\n    cmd: {cmd}\n    args:\n      - mcp-serve\n    envs:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: \"default\"\n    timeout: 300\n",
+                "  erebyx-os:\n    type: stdio\n    name: erebyx-os\n    enabled: true\n    cmd: {cmd}\n    args:\n      - mcp-serve\n    envs:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: {instance}\n    timeout: 300\n",
                 cmd = yaml_dq_string(&cmd),
                 key = yaml_dq_string(api_key),
                 url = yaml_dq_string(api_url),
+                instance = yaml_dq_string(instance_id),
             );
             format!("# EREBYX-START\nextensions:\n{entry}# EREBYX-END")
         }
@@ -134,14 +148,14 @@ pub fn preview_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> St
 /// that forwards JSON-RPC to the substrate over HTTPS. The binary is whatever
 /// `erebyx setup` was invoked from, so the AI client launches the same
 /// version the customer just installed.
-fn erebyx_server_entry(api_key: &str, api_url: &str) -> Value {
+fn erebyx_server_entry(api_key: &str, api_url: &str, instance_id: &str) -> Value {
     json!({
         "command": erebyx_command(),
         "args": ["mcp-serve"],
         "env": {
             "EREBYX_API_KEY": api_key,
             "EREBYX_API_URL": api_url,
-            "EREBYX_INSTANCE_ID": "default"
+            "EREBYX_INSTANCE_ID": instance_id
         }
     })
 }
@@ -179,7 +193,12 @@ fn value_type_name(v: &Value) -> &'static str {
 
 /// Claude Code: ~/.claude/settings.json
 /// Format: { "mcpServers": { "erebyx-os": { ... } } }
-fn write_claude_code_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_claude_code_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -195,7 +214,7 @@ fn write_claude_code_config(client: &AiClient, api_key: &str, api_url: &str) -> 
         .expect("validated above")
         .insert(
             "erebyx-os".to_string(),
-            erebyx_server_entry(api_key, api_url),
+            erebyx_server_entry(api_key, api_url, instance_id),
         );
 
     write_json(&client.config_path, &config)?;
@@ -204,7 +223,12 @@ fn write_claude_code_config(client: &AiClient, api_key: &str, api_url: &str) -> 
 
 /// Standard MCP config for Cursor, Windsurf
 /// Format: { "mcpServers": { "erebyx-os": { ... } } }
-fn write_standard_mcp_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_standard_mcp_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -220,7 +244,7 @@ fn write_standard_mcp_config(client: &AiClient, api_key: &str, api_url: &str) ->
         .expect("validated above")
         .insert(
             "erebyx-os".to_string(),
-            erebyx_server_entry(api_key, api_url),
+            erebyx_server_entry(api_key, api_url, instance_id),
         );
 
     write_json(&client.config_path, &config)?;
@@ -241,7 +265,12 @@ fn write_standard_mcp_config(client: &AiClient, api_key: &str, api_url: &str) ->
 ///   { "experimental": { "mcpServers": { "erebyx-os": { ... } } } }
 ///
 /// Format chosen by file extension on `client.config_path` (set in detect.rs).
-fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_continue_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let is_yaml = client
         .config_path
         .extension()
@@ -250,14 +279,19 @@ fn write_continue_config(client: &AiClient, api_key: &str, api_url: &str) -> Res
         .unwrap_or(false);
 
     if is_yaml {
-        write_continue_yaml(client, api_key, api_url)
+        write_continue_yaml(client, api_key, api_url, instance_id)
     } else {
-        write_continue_json_legacy(client, api_key, api_url)
+        write_continue_json_legacy(client, api_key, api_url, instance_id)
     }
 }
 
 /// Continue YAML — current format. Top-level `mcpServers`, no nesting.
-fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_continue_yaml(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     // Apply the SAME
     // git-tree credential guard the JSON path enforces. Continue users
     // frequently sync `~/.continue/` to public dotfiles repos; without
@@ -280,6 +314,7 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     // backslash and double-quote each get a backslash prefix.
     let api_key_escaped = api_key.replace('\\', "\\\\").replace('"', "\\\"");
     let api_url_escaped = api_url.replace('\\', "\\\\").replace('"', "\\\"");
+    let instance_id_escaped = instance_id.replace('\\', "\\\\").replace('"', "\\\"");
 
     // Read existing YAML if any. Continue's YAML is straightforward; we
     // do a string-level merge rather than depend on a yaml crate, to keep
@@ -288,10 +323,11 @@ fn write_continue_yaml(client: &AiClient, api_key: &str, api_url: &str) -> Resul
     let cleaned = strip_existing_erebyx_yaml_block(&existing);
 
     let entry = format!(
-        "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n      EREBYX_INSTANCE_ID: \"default\"\n",
+        "  erebyx-os:\n    command: {cmd}\n    args:\n      - mcp-serve\n    env:\n      EREBYX_API_KEY: \"{key}\"\n      EREBYX_API_URL: \"{url}\"\n      EREBYX_INSTANCE_ID: \"{instance}\"\n",
         cmd = erebyx_command(),
         key = api_key_escaped,
         url = api_url_escaped,
+        instance = instance_id_escaped,
     );
 
     // If a top-level `mcpServers:` block exists, append our entry under
@@ -384,7 +420,12 @@ fn strip_existing_erebyx_yaml_block(content: &str) -> String {
 }
 
 /// Continue JSON legacy — pre-YAML migration. Kept for users who haven't moved yet.
-fn write_continue_json_legacy(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_continue_json_legacy(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -407,7 +448,7 @@ fn write_continue_json_legacy(client: &AiClient, api_key: &str, api_url: &str) -
         .expect("validated above")
         .insert(
             "erebyx-os".to_string(),
-            erebyx_server_entry(api_key, api_url),
+            erebyx_server_entry(api_key, api_url, instance_id),
         );
 
     write_json(&client.config_path, &config)?;
@@ -416,7 +457,12 @@ fn write_continue_json_legacy(client: &AiClient, api_key: &str, api_url: &str) -
 
 /// Zed: ~/.config/zed/settings.json
 /// Format: { "context_servers": { "erebyx-os": { "command": { ... } } } }
-fn write_zed_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_zed_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -439,7 +485,7 @@ fn write_zed_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<P
                     "env": {
                         "EREBYX_API_KEY": api_key,
                         "EREBYX_API_URL": api_url,
-                        "EREBYX_INSTANCE_ID": "default"
+                        "EREBYX_INSTANCE_ID": instance_id
                     }
                 }
             }),
@@ -451,7 +497,12 @@ fn write_zed_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<P
 
 /// VS Code / Copilot: settings.json
 /// Format: { "mcp": { "servers": { "erebyx-os": { "type": "stdio", ... } } } }
-fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_vscode_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -478,7 +529,7 @@ fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Resul
             "env": {
                 "EREBYX_API_KEY": api_key,
                 "EREBYX_API_URL": api_url,
-                "EREBYX_INSTANCE_ID": "default"
+                "EREBYX_INSTANCE_ID": instance_id
             }
         }),
     );
@@ -497,7 +548,12 @@ fn write_vscode_config(client: &AiClient, api_key: &str, api_url: &str) -> Resul
 /// Schema (verified against superagent-ai/grok-cli source — `src/utils/settings.ts`):
 ///   { "mcp": { "servers": [ { id, label, enabled, transport:"stdio",
 ///                             command, args, env } ] } }
-fn write_grok_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_grok_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     let mut config = read_json_or_empty(&client.config_path)?;
     require_object_mut(&mut config, &client.config_path, "root")?;
 
@@ -537,7 +593,7 @@ fn write_grok_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<
         "env": {
             "EREBYX_API_KEY": api_key,
             "EREBYX_API_URL": api_url,
-            "EREBYX_INSTANCE_ID": "default"
+            "EREBYX_INSTANCE_ID": instance_id
         }
     });
 
@@ -576,7 +632,12 @@ fn write_grok_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<
 /// Merge-preserves every other `[mcp_servers.*]` table: we strip only the
 /// prior `# EREBYX-START`/`# EREBYX-END` fence and re-append, never touching
 /// user-authored tables.
-fn write_codex_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_codex_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     // Same git-tree credential guard the JSON/YAML writers enforce — the TOML
     // carries the API key in plaintext.
     if is_within_git_tree(&client.config_path) && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG") {
@@ -604,7 +665,7 @@ fn write_codex_config(client: &AiClient, api_key: &str, api_url: &str) -> Result
         arg = toml_basic_string("mcp-serve"),
         key = toml_basic_string(api_key),
         url = toml_basic_string(api_url),
-        inst = toml_basic_string("default"),
+        inst = toml_basic_string(instance_id),
     );
 
     let existing = std::fs::read_to_string(&client.config_path).unwrap_or_default();
@@ -645,7 +706,12 @@ fn write_codex_config(client: &AiClient, api_key: &str, api_url: &str) -> Result
 ///         EREBYX_INSTANCE_ID: default
 ///       timeout: 300
 ///     # EREBYX-END
-fn write_goose_config(client: &AiClient, api_key: &str, api_url: &str) -> Result<PathBuf> {
+fn write_goose_config(
+    client: &AiClient,
+    api_key: &str,
+    api_url: &str,
+    instance_id: &str,
+) -> Result<PathBuf> {
     // Same git-tree credential guard — the YAML carries the API key in plaintext.
     if is_within_git_tree(&client.config_path) && !env_flag_truthy("EREBYX_ALLOW_GIT_TREE_CONFIG") {
         anyhow::bail!(
@@ -660,10 +726,11 @@ fn write_goose_config(client: &AiClient, api_key: &str, api_url: &str) -> Result
     // Indented two spaces under `extensions:`. Values that could be misread as
     // YAML scalars (the api_key/url/cmd) are double-quoted + escaped.
     let entry = format!(
-        "  erebyx-os:\n    type: stdio\n    name: erebyx-os\n    enabled: true\n    cmd: {cmd}\n    args:\n      - mcp-serve\n    envs:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: \"default\"\n    timeout: 300\n",
+        "  erebyx-os:\n    type: stdio\n    name: erebyx-os\n    enabled: true\n    cmd: {cmd}\n    args:\n      - mcp-serve\n    envs:\n      EREBYX_API_KEY: {key}\n      EREBYX_API_URL: {url}\n      EREBYX_INSTANCE_ID: {instance}\n    timeout: 300\n",
         cmd = yaml_dq_string(&cmd),
         key = yaml_dq_string(api_key),
         url = yaml_dq_string(api_url),
+        instance = yaml_dq_string(instance_id),
     );
 
     let existing = std::fs::read_to_string(&client.config_path).unwrap_or_default();
@@ -1115,7 +1182,13 @@ mod tests {
         .unwrap();
 
         let client = test_client(ClientKind::GrokCli, path.clone());
-        write_grok_config(&client, "erebyx_testkey", "https://core.erebyx.com").unwrap();
+        write_grok_config(
+            &client,
+            "erebyx_testkey",
+            "https://core.erebyx.com",
+            "studio-ai",
+        )
+        .unwrap();
 
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         // Unrelated top-level key preserved.
@@ -1132,7 +1205,7 @@ mod tests {
         assert_eq!(e["args"][0], "mcp-serve");
         assert_eq!(e["env"]["EREBYX_API_KEY"], "erebyx_testkey");
         assert_eq!(e["env"]["EREBYX_API_URL"], "https://core.erebyx.com");
-        assert_eq!(e["env"]["EREBYX_INSTANCE_ID"], "default");
+        assert_eq!(e["env"]["EREBYX_INSTANCE_ID"], "studio-ai");
         // STALE command must be gone.
         assert_ne!(e["command"], "STALE");
     }
@@ -1144,7 +1217,7 @@ mod tests {
         let td = TempDir::new().expect("tempdir");
         let path = td.path().join("user-settings.json");
         let client = test_client(ClientKind::GrokCli, path.clone());
-        write_grok_config(&client, "k", "https://core.erebyx.com").unwrap();
+        write_grok_config(&client, "k", "https://core.erebyx.com", "studio-ai").unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(v["mcp"]["servers"].is_array());
         assert_eq!(v["mcp"]["servers"].as_array().unwrap().len(), 1);
@@ -1164,7 +1237,7 @@ mod tests {
         .unwrap();
 
         let client = test_client(ClientKind::Codex, path.clone());
-        write_codex_config(&client, "erebyx_k", "https://core.erebyx.com").unwrap();
+        write_codex_config(&client, "erebyx_k", "https://core.erebyx.com", "studio-ai").unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         // User content preserved.
@@ -1180,10 +1253,10 @@ mod tests {
         assert!(content.contains("[mcp_servers.\"erebyx-os\".env]"));
         assert!(content.contains("EREBYX_API_KEY = \"erebyx_k\""));
         assert!(content.contains("EREBYX_API_URL = \"https://core.erebyx.com\""));
-        assert!(content.contains("EREBYX_INSTANCE_ID = \"default\""));
+        assert!(content.contains("EREBYX_INSTANCE_ID = \"studio-ai\""));
 
         // Re-run: must replace the prior fenced block, not duplicate it.
-        write_codex_config(&client, "erebyx_k2", "https://core.erebyx.com").unwrap();
+        write_codex_config(&client, "erebyx_k2", "https://core.erebyx.com", "studio-ai").unwrap();
         let content2 = fs::read_to_string(&path).unwrap();
         assert_eq!(
             content2.matches("# EREBYX-START").count(),
@@ -1212,7 +1285,7 @@ mod tests {
         .unwrap();
 
         let client = test_client(ClientKind::Goose, path.clone());
-        write_goose_config(&client, "erebyx_k", "https://core.erebyx.com").unwrap();
+        write_goose_config(&client, "erebyx_k", "https://core.erebyx.com", "studio-ai").unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         // Other top-level + the developer extension preserved.
@@ -1226,10 +1299,11 @@ mod tests {
         assert!(!content.contains("command: "), "must NOT emit `command:`");
         assert!(content.contains("envs:"), "Goose uses envs, not env");
         assert!(content.contains("EREBYX_API_KEY: \"erebyx_k\""));
+        assert!(content.contains("EREBYX_INSTANCE_ID: \"studio-ai\""));
         assert!(content.contains("timeout: 300"));
 
         // Re-run idempotency.
-        write_goose_config(&client, "erebyx_k2", "https://core.erebyx.com").unwrap();
+        write_goose_config(&client, "erebyx_k2", "https://core.erebyx.com", "studio-ai").unwrap();
         let content2 = fs::read_to_string(&path).unwrap();
         assert_eq!(content2.matches("# EREBYX-START").count(), 1);
         assert!(
@@ -1245,7 +1319,7 @@ mod tests {
         let td = TempDir::new().expect("tempdir");
         let path = td.path().join("config.yaml");
         let client = test_client(ClientKind::Goose, path.clone());
-        write_goose_config(&client, "k", "https://core.erebyx.com").unwrap();
+        write_goose_config(&client, "k", "https://core.erebyx.com", "studio-ai").unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("extensions:"));
         assert!(content.contains("erebyx-os:"));
@@ -1271,7 +1345,8 @@ mod tests {
             )
             .unwrap();
             let client = test_client(kind.clone(), path.clone());
-            write_standard_mcp_config(&client, "erebyx_k", "https://core.erebyx.com").unwrap();
+            write_standard_mcp_config(&client, "erebyx_k", "https://core.erebyx.com", "studio-ai")
+                .unwrap();
             let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(v["theme"], "x", "{kind:?}: top-level preserved");
             assert_eq!(
@@ -1285,6 +1360,10 @@ mod tests {
             assert_eq!(
                 v["mcpServers"]["erebyx-os"]["env"]["EREBYX_API_URL"],
                 "https://core.erebyx.com"
+            );
+            assert_eq!(
+                v["mcpServers"]["erebyx-os"]["env"]["EREBYX_INSTANCE_ID"],
+                "studio-ai"
             );
         }
     }
@@ -1314,8 +1393,12 @@ mod tests {
         ];
         for (kind, fname) in kinds {
             let client = test_client(kind.clone(), PathBuf::from("/tmp").join(fname));
-            let s = preview_mcp_config(&client, "<KEY>", "https://core.erebyx.com");
+            let s = preview_mcp_config(&client, "<KEY>", "https://core.erebyx.com", "studio-ai");
             assert!(s.contains("erebyx-os"), "{kind:?} preview names erebyx-os");
+            assert!(
+                s.contains("studio-ai"),
+                "{kind:?} preview includes selected instance id"
+            );
             assert!(
                 s.contains("mcp-serve"),
                 "{kind:?} preview has mcp-serve arg"
