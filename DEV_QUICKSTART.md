@@ -40,6 +40,12 @@ export EREBYX_INSTANCE_ID="my-laptop"
 ```
 
 Persist these in your shell rc file so every shell sees them.
+Use the same instance during client setup when you want generated MCP configs
+and hooks pinned to that slice:
+
+```bash
+erebyx setup --instance-id my-laptop
+```
 
 ---
 
@@ -83,6 +89,9 @@ erebyx wrap-up "Got the CLI working" \
 ```
 
 That handoff is now retrievable next session via `erebyx load-context`.
+Use `erebyx load-context --loadout boot` for the cheap restore path, or
+`erebyx load-context --anchors setup,cli --loadout work` when you need
+domain-scoped working context.
 
 **You're done.** That's the whole loop.
 

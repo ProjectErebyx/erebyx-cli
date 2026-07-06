@@ -40,6 +40,13 @@ fn ensure_safe_api_url(api_url: &str) -> Result<()> {
     Ok(())
 }
 
+fn resolve_setup_instance_id(instance_id: Option<String>) -> String {
+    instance_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(resolve_instance_id)
+}
+
 /// Fetch the substrate's `restore_identity` + `load_context` summary
 /// payloads and render a compact pre-injection text suitable for the
 /// dynamic block of every detected client's rules file.
@@ -50,7 +57,7 @@ fn ensure_safe_api_url(api_url: &str) -> Result<()> {
 ///
 /// **Fail-open everywhere**: returns an empty string on any error.
 /// Setup never refuses to complete because a single API call failed.
-async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
+async fn fetch_dynamic_context(api_key: &str, api_url: &str, instance_id: &str) -> String {
     // P1-4: never POST the bearer token over an unsafe URL. `fetch_dynamic_context`
     // is fail-open by contract (returns "" on any error), so a bad URL yields an
     // empty dynamic block rather than leaking credentials to an arbitrary host.
@@ -102,7 +109,7 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .post(format!("{}/v0/identity/restore", base))
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", resolve_instance_id())
+        .header("X-Instance-ID", instance_id)
         .header("X-Erebyx-Session-Id", &session)
         .json(&json!({"detail_level": "summary", "limit": 5}))
         .send()
@@ -117,9 +124,9 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         .post(format!("{}/v0/session/load", base))
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", resolve_instance_id())
+        .header("X-Instance-ID", instance_id)
         .header("X-Erebyx-Session-Id", &session)
-        .json(&json!({"anchors": [], "detail_level": "summary"}))
+        .json(&json!({"anchors": [], "detail_level": "summary", "loadout": "boot"}))
         .send()
         .await
     {
@@ -240,8 +247,13 @@ fn render_dynamic_block(identity: Option<&Value>, context: Option<&Value>) -> St
 /// fetch + auth probe so it can run offline against any env. The
 /// `EREBYX_API_KEY` prompt is also skipped — paths are shown using
 /// a placeholder. Run the real setup for credentials + dynamic context.
-pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>) -> Result<()> {
+pub async fn run_setup_dry_run(
+    _api_key: Option<String>,
+    api_url: Option<String>,
+    instance_id: Option<String>,
+) -> Result<()> {
     let api_url = api_url.unwrap_or_else(|| "https://core.erebyx.com".to_string());
+    let instance_id = resolve_setup_instance_id(instance_id);
 
     // P1-4: reject an unsafe URL up-front. Dry-run makes no HTTP calls, but it
     // PREVIEWS the hook script + config that the real run would write with this
@@ -326,7 +338,7 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
         "Config that would be merged (placeholder key):".bold()
     );
     for client in &clients {
-        let snippet = config::preview_mcp_config(client, placeholder_key, &api_url);
+        let snippet = config::preview_mcp_config(client, placeholder_key, &api_url, &instance_id);
         println!();
         println!(
             "  ── {} → {}",
@@ -381,10 +393,11 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
         "  {} placeholder used wherever an API key would appear.",
         placeholder_key.dimmed()
     );
+    println!("  Instance ID preview: {}", instance_id.dimmed());
 
     // Remote connectors are part of what `erebyx setup` surfaces — show them
     // in the dry-run too so the preview is faithful.
-    print_remote_connectors();
+    print_remote_connectors(&api_url, &instance_id);
     println!();
     println!("  Re-run without `--dry-run` to perform setup.");
     println!();
@@ -394,6 +407,7 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
 pub async fn run_setup(
     api_key: Option<String>,
     api_url: Option<String>,
+    instance_id: Option<String>,
     assume_yes: bool,
 ) -> Result<()> {
     println!();
@@ -455,6 +469,7 @@ pub async fn run_setup(
     let api_url = api_url
         .or_else(|| std::env::var("EREBYX_API_URL").ok())
         .unwrap_or_else(|| "https://core.erebyx.com".to_string());
+    let instance_id = resolve_setup_instance_id(instance_id);
 
     // P1-4: enforce HTTPS-or-localhost on the resolved URL BEFORE writing any
     // config, rules, or hook script with it — and before `fetch_dynamic_context`
@@ -547,7 +562,7 @@ pub async fn run_setup(
         pb.set_message(format!("Configuring {}...", client.name));
 
         // Write MCP server config
-        match config::write_mcp_config(client, &api_key, &api_url) {
+        match config::write_mcp_config(client, &api_key, &api_url, &instance_id) {
             Ok(path) => {
                 paths_touched.push((format!("{} config", client.name), path.clone()));
                 // Write rules file
@@ -557,7 +572,7 @@ pub async fn run_setup(
                         // Install hooks (Claude Code only)
                         if client.kind == detect::ClientKind::ClaudeCode {
                             has_claude_code = true;
-                            match hooks::install_hooks(client, &api_key, &api_url) {
+                            match hooks::install_hooks(client, &api_key, &api_url, &instance_id) {
                                 Ok(_) => {
                                     paths_touched.push((
                                         "Claude Code hook script".to_string(),
@@ -606,7 +621,7 @@ pub async fn run_setup(
     // Fail-open: if the substrate call fails, dynamic_content is
     // empty and `write_dynamic_block` becomes a no-op per-file.
     if !to_configure.is_empty() {
-        let dynamic_content = fetch_dynamic_context(&api_key, &api_url).await;
+        let dynamic_content = fetch_dynamic_context(&api_key, &api_url, &instance_id).await;
         if !dynamic_content.is_empty() {
             for client in &to_configure {
                 if let Err(e) = rules::write_dynamic_block(client, &dynamic_content) {
@@ -656,6 +671,7 @@ pub async fn run_setup(
     println!("  • Your AI tools will have access to EREBYX memory tools");
     println!("  • Rules files guide your AI to use memory proactively");
     println!("  • Memory persists across every configured client");
+    println!("  • Instance slice: {}", instance_id.dimmed());
 
     // Claude Code hooks need EREBYX_API_KEY in the shell environment at runtime.
     // We deliberately do NOT echo the key — it would land in shell history.
@@ -699,7 +715,7 @@ pub async fn run_setup(
     // Remote MCP connectors — clients with NO local config file. They point
     // at the hosted substrate over HTTP with a Bearer token, added by hand
     // in each app's UI.
-    print_remote_connectors();
+    print_remote_connectors(&api_url, &instance_id);
     println!();
 
     // CLI v0.1.2 (exit-code fix): if we attempted to configure clients but
@@ -724,7 +740,7 @@ pub async fn run_setup(
 /// register an MCP server through their own UI, pointing at the hosted EREBYX
 /// substrate over HTTP with a Bearer token. Listed at the end of `erebyx setup`
 /// (and the dry-run) so the user knows the manual step for each.
-fn print_remote_connectors() {
+fn print_remote_connectors(api_url: &str, instance_id: &str) {
     println!();
     println!("  {}", "Remote connectors (add manually):".bold());
     println!(
@@ -733,9 +749,11 @@ fn print_remote_connectors() {
     );
     println!();
     println!(
-        "    {} https://core.erebyx.com/mcp  with  Authorization: Bearer <EREBYX_API_KEY>",
-        "URL:".dimmed()
+        "    {} {}/mcp  with  Authorization: Bearer <EREBYX_API_KEY>",
+        "URL:".dimmed(),
+        api_url.trim_end_matches('/')
     );
+    println!("    {} X-Instance-ID: {}", "Header:".dimmed(), instance_id);
     println!();
     println!(
         "    • {} — Settings → Connectors → Developer Mode → add custom connector",
@@ -850,7 +868,8 @@ mod dynamic_block_tests {
 
 #[cfg(test)]
 mod api_url_guard_tests {
-    use super::ensure_safe_api_url;
+    use super::{ensure_safe_api_url, resolve_setup_instance_id};
+    use serial_test::serial;
 
     /// REGRESSION (P1-4): setup must enforce HTTPS-or-localhost on
     /// `api_url`. Against the original `mod.rs` there was NO such guard —
@@ -919,10 +938,24 @@ mod api_url_guard_tests {
     /// rejects. Async-but-no-I/O, so it runs without a substrate.
     #[tokio::test]
     async fn run_setup_dry_run_rejects_unsafe_url() {
-        let res = super::run_setup_dry_run(None, Some("http://evil.example.com".to_string())).await;
+        let res =
+            super::run_setup_dry_run(None, Some("http://evil.example.com".to_string()), None).await;
         assert!(
             res.is_err(),
             "dry-run must reject a plain-http internet URL"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_setup_instance_id_prefers_trimmed_flag_then_env_default() {
+        std::env::set_var("EREBYX_INSTANCE_ID", "env-ai");
+        assert_eq!(
+            resolve_setup_instance_id(Some("  flag-ai  ".to_string())),
+            "flag-ai"
+        );
+        assert_eq!(resolve_setup_instance_id(Some("   ".to_string())), "env-ai");
+        assert_eq!(resolve_setup_instance_id(None), "env-ai");
+        std::env::remove_var("EREBYX_INSTANCE_ID");
     }
 }

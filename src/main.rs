@@ -89,6 +89,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Setup {
             api_key,
             api_url,
+            instance_id,
             dry_run,
             yes,
         } => {
@@ -106,9 +107,9 @@ async fn run(cli: Cli) -> Result<()> {
                 );
             }
             if dry_run {
-                setup::run_setup_dry_run(api_key, api_url).await?;
+                setup::run_setup_dry_run(api_key, api_url, instance_id).await?;
             } else {
-                setup::run_setup(api_key, api_url, yes).await?;
+                setup::run_setup(api_key, api_url, instance_id, yes).await?;
             }
         }
 
@@ -410,12 +411,23 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Commands::LoadContext { anchors, mode } => {
+        Commands::LoadContext {
+            anchors,
+            loadout,
+            detail,
+            mode,
+        } => {
             let client = ErebyxClient::new()?;
             let mut args = json!({});
 
             if let Some(anchors) = anchors {
                 args["anchors"] = json!(anchors);
+            }
+            if let Some(loadout) = loadout {
+                args["loadout"] = json!(loadout.to_string());
+            }
+            if let Some(detail) = detail {
+                args["detail_level"] = json!(detail.to_string());
             }
             if let Some(mode) = mode {
                 args["mode"] = json!(mode.to_string());
