@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 mod cli;
 mod client;
+mod credentials;
 mod output;
 mod setup;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
 use std::env;
@@ -89,6 +90,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Setup {
             api_key,
             api_url,
+            instance_id,
+            passphrase,
             dry_run,
             yes,
         } => {
@@ -108,8 +111,17 @@ async fn run(cli: Cli) -> Result<()> {
             if dry_run {
                 setup::run_setup_dry_run(api_key, api_url).await?;
             } else {
-                setup::run_setup(api_key, api_url, yes).await?;
+                setup::run_setup(api_key, api_url, instance_id, passphrase, yes).await?;
             }
+        }
+
+        Commands::Login {
+            api_key,
+            api_url,
+            instance_id,
+            passphrase,
+        } => {
+            run_login(api_key, api_url, instance_id, passphrase).await?;
         }
 
         Commands::HookInject => {
@@ -560,6 +572,132 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_login(
+    api_key: Option<String>,
+    api_url: Option<String>,
+    instance_id: Option<String>,
+    passphrase: Option<String>,
+) -> Result<()> {
+    if api_key.is_some() {
+        eprintln!("  ⚠ Reading API key from `--api-key` flag — the value lands in");
+        eprintln!("    shell history and `ps` output. Prefer interactive login or EREBYX_API_KEY.");
+    }
+    if passphrase.is_some() {
+        eprintln!("  ⚠ Reading passphrase from `--passphrase` flag — prefer interactive login or EREBYX_PASSPHRASE.");
+    }
+
+    let stored =
+        credentials::load_credentials()?.unwrap_or_else(|| credentials::StoredCredentials {
+            api_key: String::new(),
+            api_url: "https://core.erebyx.com".to_string(),
+            instance_id: String::new(),
+            passphrase: None,
+        });
+
+    let api_key = api_key
+        .or_else(|| env::var("EREBYX_API_KEY").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| (!stored.api_key.trim().is_empty()).then_some(stored.api_key.clone()))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(prompt_secret_api_key);
+    if api_key.trim().is_empty() {
+        anyhow::bail!("EREBYX_API_KEY is required. Paste an existing counterpart API key or set EREBYX_API_KEY.");
+    }
+
+    let api_url = api_url
+        .or_else(|| env::var("EREBYX_API_URL").ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(stored.api_url.clone())
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    if !is_safe_url(&api_url) {
+        anyhow::bail!(
+            "EREBYX_API_URL must be https:// (got {}). Plain http:// is only allowed for localhost/127.0.0.1.",
+            api_url
+        );
+    }
+
+    let instance_id = instance_id
+        .or_else(|| env::var("EREBYX_INSTANCE_ID").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| (!stored.instance_id.trim().is_empty()).then_some(stored.instance_id.clone()))
+        .unwrap_or_else(|| prompt_line("  Existing counterpart instance id").unwrap_or_default())
+        .trim()
+        .to_string();
+    if instance_id.is_empty() || instance_id == "default" {
+        anyhow::bail!(
+            "A real counterpart instance id is required. Copy it from the dashboard/API enrollment output and run `erebyx login --instance-id <id>`."
+        );
+    }
+
+    let passphrase = passphrase
+        .or_else(|| env::var("EREBYX_PASSPHRASE").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or(stored.passphrase.clone())
+        .or_else(|| {
+            prompt_optional_passphrase(
+                "  Counterpart passphrase (blank only for non-passphrase tenants)",
+            )
+        });
+
+    let credentials = credentials::StoredCredentials {
+        api_key,
+        api_url,
+        instance_id,
+        passphrase,
+    }
+    .normalized();
+    let path = credentials::save_credentials(&credentials)?;
+
+    println!();
+    println!("  ✓ EREBYX counterpart credentials saved.");
+    println!("  • instance_id: {}", credentials.instance_id);
+    println!("  • api_url: {}", credentials.api_url);
+    println!(
+        "  • passphrase: {}",
+        if credentials.passphrase.is_some() {
+            "stored"
+        } else {
+            "not set"
+        }
+    );
+    println!("  • file: {}", path.display());
+    println!();
+    println!("  Run `erebyx setup` to write this counterpart into every detected client.");
+    Ok(())
+}
+
+fn prompt_secret_api_key() -> String {
+    dialoguer::Password::new()
+        .with_prompt("  Enter your EREBYX API key")
+        .interact()
+        .unwrap_or_default()
+}
+
+fn prompt_optional_passphrase(prompt: &str) -> Option<String> {
+    dialoguer::Password::new()
+        .with_prompt(prompt)
+        .allow_empty_password(true)
+        .interact()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn prompt_line(prompt: &str) -> Result<String> {
+    use std::io::Write;
+    print!("{prompt}: ");
+    std::io::stdout()
+        .flush()
+        .context("Failed to flush stdout")?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("Failed to read stdin")?;
+    Ok(line)
 }
 
 /// MCP stdio server bridge.

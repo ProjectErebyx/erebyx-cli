@@ -10,8 +10,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 Connects any MCP-capable AI client (Claude Code, Cursor, Windsurf, Continue,
 Zed, VS Code / Copilot, ChatGPT Custom GPTs, Hermes, raw HTTP harnesses) to
-your EREBYX memory substrate. The 5 cognitive verbs (restore_identity,
-load_context, save, remember, wrap_up) are the canonical surface.
+your EREBYX memory substrate. The 6 cognitive verbs (restore_identity,
+load_context, remember, save, update, wrap_up) are the canonical surface.
 
 Quickstart:
   export EREBYX_API_KEY=<your key>      # get one at https://app.erebyx.com/keys
@@ -156,6 +156,14 @@ pub enum Commands {
         #[arg(long)]
         api_url: Option<String>,
 
+        /// Existing counterpart instance id to carry into every configured client
+        #[arg(long)]
+        instance_id: Option<String>,
+
+        /// Passphrase for passphrase-bound tenants (prefer interactive prompt or EREBYX_PASSPHRASE)
+        #[arg(long)]
+        passphrase: Option<String>,
+
         /// Preview without writing — show every file setup would touch
         /// and every config merge it would perform, then exit. Nothing
         /// on disk is modified. Useful for auditing what setup will do
@@ -172,6 +180,25 @@ pub enum Commands {
         /// `--force`) to reconfigure non-interactively.
         #[arg(long, short = 'y', visible_alias = "force")]
         yes: bool,
+    },
+
+    /// Store credentials for an existing counterpart on this machine
+    Login {
+        /// API key (or set EREBYX_API_KEY env var)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// API URL override (default: https://core.erebyx.com)
+        #[arg(long)]
+        api_url: Option<String>,
+
+        /// Existing counterpart instance id
+        #[arg(long)]
+        instance_id: Option<String>,
+
+        /// Passphrase for passphrase-bound tenants (prefer interactive prompt or EREBYX_PASSPHRASE)
+        #[arg(long)]
+        passphrase: Option<String>,
     },
 
     /// Check EREBYX server health and client configurations

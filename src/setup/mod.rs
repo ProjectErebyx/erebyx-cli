@@ -21,7 +21,8 @@ use std::path::PathBuf;
 
 use detect::{detect_clients, AiClient};
 
-use crate::client::{is_safe_url, resolve_instance_id};
+use crate::client::is_safe_url;
+use crate::credentials::{self, StoredCredentials};
 
 /// Shared error message for an unsafe `EREBYX_API_URL` — matches the
 /// `ErebyxClient::new` guard wording so the operator sees one consistent
@@ -50,13 +51,13 @@ fn ensure_safe_api_url(api_url: &str) -> Result<()> {
 ///
 /// **Fail-open everywhere**: returns an empty string on any error.
 /// Setup never refuses to complete because a single API call failed.
-async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
+async fn fetch_dynamic_context(credentials: &config::SetupCredentials) -> String {
     // P1-4: never POST the bearer token over an unsafe URL. `fetch_dynamic_context`
     // is fail-open by contract (returns "" on any error), so a bad URL yields an
     // empty dynamic block rather than leaking credentials to an arbitrary host.
     // In normal flow `run_setup` already rejected an unsafe URL before reaching
     // here; this is the in-function fence the finding calls for.
-    if !is_safe_url(api_url) {
+    if !is_safe_url(&credentials.api_url) {
         return String::new();
     }
     let http = match reqwest::Client::builder()
@@ -66,7 +67,7 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
         Ok(c) => c,
         Err(_) => return String::new(),
     };
-    let base = api_url.trim_end_matches('/');
+    let base = credentials.api_url.trim_end_matches('/');
     // Setup-time session id — informational only; setup isn't a long-
     // lived session, so a simple per-install token is fine. Format
     // matches what the substrate expects (opaque string).
@@ -98,31 +99,33 @@ async fn fetch_dynamic_context(api_key: &str, api_url: &str) -> String {
     }
 
     // identity
-    let identity: Option<Value> = match http
+    let mut identity_req = http
         .post(format!("{}/v0/identity/restore", base))
-        .bearer_auth(api_key)
+        .bearer_auth(&credentials.api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", resolve_instance_id())
+        .header("X-Instance-ID", &credentials.instance_id)
         .header("X-Erebyx-Session-Id", &session)
-        .json(&json!({"detail_level": "summary", "limit": 5}))
-        .send()
-        .await
-    {
+        .json(&json!({"detail_level": "summary", "limit": 5}));
+    if let Some(passphrase) = credentials.passphrase.as_deref() {
+        identity_req = identity_req.header("X-Passphrase", passphrase);
+    }
+    let identity: Option<Value> = match identity_req.send().await {
         Ok(r) => capped_json(r).await,
         Err(_) => None,
     };
 
     // context
-    let context: Option<Value> = match http
+    let mut context_req = http
         .post(format!("{}/v0/session/load", base))
-        .bearer_auth(api_key)
+        .bearer_auth(&credentials.api_key)
         .header("Content-Type", "application/json")
-        .header("X-Instance-ID", resolve_instance_id())
+        .header("X-Instance-ID", &credentials.instance_id)
         .header("X-Erebyx-Session-Id", &session)
-        .json(&json!({"anchors": [], "detail_level": "summary"}))
-        .send()
-        .await
-    {
+        .json(&json!({"anchors": [], "detail_level": "summary"}));
+    if let Some(passphrase) = credentials.passphrase.as_deref() {
+        context_req = context_req.header("X-Passphrase", passphrase);
+    }
+    let context: Option<Value> = match context_req.send().await {
         Ok(r) => capped_json(r).await,
         Err(_) => None,
     };
@@ -250,6 +253,12 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     ensure_safe_api_url(&api_url)?;
 
     let placeholder_key = "<YOUR_EREBYX_API_KEY>";
+    let placeholder_credentials = config::SetupCredentials {
+        api_key: placeholder_key.to_string(),
+        api_url: api_url.clone(),
+        instance_id: "<YOUR_EREBYX_INSTANCE_ID>".to_string(),
+        passphrase: Some("<YOUR_EREBYX_PASSPHRASE>".to_string()),
+    };
 
     println!();
     println!(
@@ -326,7 +335,7 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
         "Config that would be merged (placeholder key):".bold()
     );
     for client in &clients {
-        let snippet = config::preview_mcp_config(client, placeholder_key, &api_url);
+        let snippet = config::preview_mcp_config_with_credentials(client, &placeholder_credentials);
         println!();
         println!(
             "  ── {} → {}",
@@ -378,7 +387,7 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     println!();
 
     println!(
-        "  {} placeholder used wherever an API key would appear.",
+        "  {} placeholder used wherever credential material would appear.",
         placeholder_key.dimmed()
     );
 
@@ -391,9 +400,100 @@ pub async fn run_setup_dry_run(_api_key: Option<String>, api_url: Option<String>
     Ok(())
 }
 
+fn resolve_setup_credentials(
+    api_key: Option<String>,
+    api_url: Option<String>,
+    instance_id: Option<String>,
+    passphrase: Option<String>,
+) -> Result<config::SetupCredentials> {
+    let stored = credentials::load_credentials()?.unwrap_or_else(|| StoredCredentials {
+        api_key: String::new(),
+        api_url: "https://core.erebyx.com".to_string(),
+        instance_id: String::new(),
+        passphrase: None,
+    });
+
+    let api_key = api_key
+        .or_else(|| std::env::var("EREBYX_API_KEY").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| (!stored.api_key.trim().is_empty()).then_some(stored.api_key.clone()))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| {
+            println!(
+                "  No stored API key found. `erebyx login` will save it for future setup runs."
+            );
+            Password::new()
+                .with_prompt("  Enter your EREBYX API key")
+                .interact()
+                .unwrap_or_default()
+        });
+    if api_key.trim().is_empty() {
+        anyhow::bail!("EREBYX_API_KEY is required. Run `erebyx login` or pass --api-key.");
+    }
+
+    let api_url = api_url
+        .or_else(|| std::env::var("EREBYX_API_URL").ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(stored.api_url.clone())
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+
+    let instance_id = instance_id
+        .or_else(|| std::env::var("EREBYX_INSTANCE_ID").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| (!stored.instance_id.trim().is_empty()).then_some(stored.instance_id.clone()))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| prompt_line("  Existing counterpart instance id").unwrap_or_default());
+    if instance_id.is_empty() || instance_id == "default" {
+        anyhow::bail!(
+            "A real counterpart instance id is required. Run `erebyx login --instance-id <id>` with the id from dashboard/API enrollment; setup will not write silently-broken `default` configs."
+        );
+    }
+
+    let passphrase = passphrase
+        .or_else(|| std::env::var("EREBYX_PASSPHRASE").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or(stored.passphrase.clone())
+        .or_else(|| {
+            println!("  No passphrase found. Leave blank only for a tenant that does not use passphrase-bound encryption.");
+            Password::new()
+                .with_prompt("  Counterpart passphrase")
+                .allow_empty_password(true)
+                .interact()
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+    if passphrase.is_none() {
+        println!(
+            "  {} No EREBYX_PASSPHRASE will be written; encrypted tenants will authenticate but fail to decrypt until you run `erebyx login` with a passphrase.",
+            "⚠".yellow()
+        );
+    }
+
+    Ok(config::SetupCredentials {
+        api_key,
+        api_url,
+        instance_id,
+        passphrase,
+    })
+}
+
+fn prompt_line(prompt: &str) -> Result<String> {
+    use std::io::Write;
+    print!("{prompt}: ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
 pub async fn run_setup(
     api_key: Option<String>,
     api_url: Option<String>,
+    instance_id: Option<String>,
+    passphrase: Option<String>,
     assume_yes: bool,
 ) -> Result<()> {
     println!();
@@ -432,34 +532,29 @@ pub async fn run_setup(
     }
     println!();
 
-    // Step 2: Get API key
-    let api_key = match api_key {
-        Some(key) => key,
-        None => {
-            let env_key = std::env::var("EREBYX_API_KEY").ok();
-            if let Some(key) = env_key {
-                println!(
-                    "  {} Using EREBYX_API_KEY from environment",
-                    "✓".green().bold()
-                );
-                key
-            } else {
-                // Mask input — API keys must never land in terminal scrollback or shell history.
-                Password::new()
-                    .with_prompt("  Enter your EREBYX API key")
-                    .interact()?
-            }
-        }
-    };
-
-    let api_url = api_url
-        .or_else(|| std::env::var("EREBYX_API_URL").ok())
-        .unwrap_or_else(|| "https://core.erebyx.com".to_string());
+    let credentials = resolve_setup_credentials(api_key, api_url, instance_id, passphrase)?;
+    match credentials::save_credentials(&StoredCredentials {
+        api_key: credentials.api_key.clone(),
+        api_url: credentials.api_url.clone(),
+        instance_id: credentials.instance_id.clone(),
+        passphrase: credentials.passphrase.clone(),
+    }) {
+        Ok(path) => println!(
+            "  {} Saved counterpart credentials for future CLI/setup runs ({})",
+            "✓".green().bold(),
+            path.display()
+        ),
+        Err(e) => println!(
+            "  {} Could not save local credential store; setup will continue ({})",
+            "⚠".yellow(),
+            e
+        ),
+    }
 
     // P1-4: enforce HTTPS-or-localhost on the resolved URL BEFORE writing any
     // config, rules, or hook script with it — and before `fetch_dynamic_context`
     // would POST the bearer token. One guard, all downstream consumers covered.
-    ensure_safe_api_url(&api_url)?;
+    ensure_safe_api_url(&credentials.api_url)?;
 
     // Step 3: Choose which clients to configure
     let unconfigured: Vec<&AiClient> = clients.iter().filter(|c| !c.config_exists).collect();
@@ -547,7 +642,7 @@ pub async fn run_setup(
         pb.set_message(format!("Configuring {}...", client.name));
 
         // Write MCP server config
-        match config::write_mcp_config(client, &api_key, &api_url) {
+        match config::write_mcp_config_with_credentials(client, &credentials) {
             Ok(path) => {
                 paths_touched.push((format!("{} config", client.name), path.clone()));
                 // Write rules file
@@ -557,7 +652,7 @@ pub async fn run_setup(
                         // Install hooks (Claude Code only)
                         if client.kind == detect::ClientKind::ClaudeCode {
                             has_claude_code = true;
-                            match hooks::install_hooks(client, &api_key, &api_url) {
+                            match hooks::install_hooks(client, &credentials) {
                                 Ok(_) => {
                                     paths_touched.push((
                                         "Claude Code hook script".to_string(),
@@ -606,7 +701,7 @@ pub async fn run_setup(
     // Fail-open: if the substrate call fails, dynamic_content is
     // empty and `write_dynamic_block` becomes a no-op per-file.
     if !to_configure.is_empty() {
-        let dynamic_content = fetch_dynamic_context(&api_key, &api_url).await;
+        let dynamic_content = fetch_dynamic_context(&credentials).await;
         if !dynamic_content.is_empty() {
             for client in &to_configure {
                 if let Err(e) = rules::write_dynamic_block(client, &dynamic_content) {
@@ -616,6 +711,21 @@ pub async fn run_setup(
                     ));
                 }
             }
+        }
+        match credentials::portable_harness_dir().and_then(|dir| {
+            rules::write_portable_harness_files(&dir, &credentials, &dynamic_content)
+        }) {
+            Ok(paths) => {
+                for path in paths {
+                    let label = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| format!("Portable {}", n))
+                        .unwrap_or_else(|| "Portable harness file".to_string());
+                    paths_touched.push((label, path));
+                }
+            }
+            Err(e) => errors.push(format!("portable harness files skipped ({})", e)),
         }
     }
 
@@ -662,14 +772,19 @@ pub async fn run_setup(
     if has_claude_code {
         println!();
         println!("  {}", "Required for Claude Code hooks:".bold().yellow());
-        println!("  Add this to your shell profile (~/.zshrc or ~/.bashrc):");
+        println!("  Setup wrote install-time credential defaults into the owner-only hook script.");
+        println!("  Env vars still override those defaults. To rotate manually, add these to your shell profile:");
         println!();
         println!("    export EREBYX_API_KEY=\"<your-api-key>\"");
+        println!(
+            "    export EREBYX_INSTANCE_ID=\"{}\"",
+            credentials.instance_id
+        );
+        println!("    export EREBYX_PASSPHRASE=\"<your-passphrase>\"");
         println!();
         println!(
             "  {}",
-            "Use the same key you pasted above. The MCP server reads it from config; hooks need it in your shell."
-                .dimmed()
+            "Use the same credential set saved by `erebyx login`.".dimmed()
         );
     }
 

@@ -4,6 +4,8 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
 
+use crate::credentials;
+
 /// Maximum response body size we will buffer (10 MiB).
 const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -290,7 +292,7 @@ pub struct ErebyxClient {
     /// v0.1.1+). When set, sent as the `X-Passphrase` header on every
     /// request. Resolved from `EREBYX_PASSPHRASE`; empty values
     /// normalized to `None`. Future: prompt-at-setup + OS-keychain
-    /// persistence via the `keyring` crate.
+    /// persistence via `erebyx login`.
     passphrase: Option<String>,
 }
 
@@ -334,24 +336,38 @@ fn parse_csv_header(value: Option<&reqwest::header::HeaderValue>) -> Vec<String>
 
 impl ErebyxClient {
     pub fn new() -> Result<Self> {
+        let stored =
+            credentials::load_credentials().context("Failed to load stored EREBYX credentials")?;
         let api_key = env::var("EREBYX_API_KEY")
-            .context("EREBYX_API_KEY environment variable is required")?;
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| stored.as_ref().map(|c| c.api_key.clone()))
+            .context("EREBYX_API_KEY is required. Run `erebyx login` or set EREBYX_API_KEY.")?;
 
-        let base_url =
-            env::var("EREBYX_API_URL").unwrap_or_else(|_| "https://core.erebyx.com".to_string());
+        let base_url = env::var("EREBYX_API_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| stored.as_ref().map(|c| c.api_url.clone()))
+            .unwrap_or_else(|| "https://core.erebyx.com".to_string());
 
-        // Default to "default" — same canonical tenant slice across CLI / SDK / extension.
-        // Override with EREBYX_INSTANCE_ID if you want per-surface attribution.
-        let instance_id = resolve_instance_id();
+        // Env is the runtime override. `erebyx login` is the durable carry
+        // layer for an existing counterpart on a fresh machine/client.
+        let instance_id = env::var("EREBYX_INSTANCE_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| stored.as_ref().map(|c| c.instance_id.clone()))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(resolve_instance_id);
 
         // Argon2id-default-on: tenants register with a passphrase used to
         // derive the KEK at request time. EREBYX_PASSPHRASE is the transport
-        // until prompt-at-setup + OS-keychain (keyring crate, follow-up).
-        // Empty strings normalize to None so legacy hkdf_api_key tenants
+        // until OS-keychain (keyring crate, follow-up). Empty strings normalize to None so legacy hkdf_api_key tenants
         // don't accidentally transmit an empty X-Passphrase header.
         let passphrase = env::var("EREBYX_PASSPHRASE")
             .ok()
-            .filter(|s| !s.trim().is_empty());
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| stored.and_then(|c| c.passphrase));
 
         if api_key.trim().is_empty() {
             anyhow::bail!("EREBYX_API_KEY is set but empty");
