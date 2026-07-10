@@ -174,8 +174,7 @@ pub fn map_actionable_error(raw: &str) -> String {
     // caller opts into verbosity via RUST_LOG (any non-empty value) or
     // EREBYX_VERBOSE so an operator debugging an incident can still see it.
     if raw.contains("500") || raw.contains("502") || raw.contains("503") || raw.contains("504") {
-        let base =
-            "EREBYX server error. Try again in a few seconds; if it persists, report it.\n\
+        let base = "EREBYX server error. Try again in a few seconds; if it persists, report it.\n\
              Issues: https://github.com/ProjectEREBYX/erebyx-cli/issues";
         if verbose_errors_enabled() {
             return format!("{base}\nOriginal error: {raw}");

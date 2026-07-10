@@ -8,11 +8,12 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::config::secure_write::atomic_write_secret;
+use super::config::SetupCredentials;
 use super::config::{env_flag_truthy, is_within_git_tree};
 use super::detect::{AiClient, ClientKind};
 
 /// The universal rules content that works across all AI models.
-/// Aligned to v0.1.1 launch surface — five cognitive verbs only.
+/// Aligned to the beta launch surface — six cognitive verbs only.
 ///
 /// **Doctrine: declarative, not imperative.**
 ///
@@ -34,22 +35,25 @@ use super::detect::{AiClient, ClientKind};
 /// padding around each instruction.
 const RULES_CONTENT: &str = r#"# EREBYX Memory — substrate reference
 
-This project uses EREBYX for persistent AI memory across sessions. The substrate exposes 5 cognitive tools via MCP. Tool selection is automatic; this section describes when each tool applies so the AI can decide.
+This project uses EREBYX for persistent AI memory across sessions. The substrate exposes 6 MCP tools. Tool selection is automatic.
 
-**Session-start tools (called once at the beginning of a session):**
-- `restore_identity` — returns the stored identity, ethos, and foundation memories that should anchor this session's responses.
-- `load_context` — returns the prior session's handoff (what was built + what is next), related memories, and active skills. Accepts `anchors=["domain"]` to scope to one domain or `[]` for the most recent handoff regardless of domain.
+**Session-start tools:**
+- `restore_identity` — stored identity, ethos, and foundation memories.
+- `load_context` — prior handoff, related memories, active loadout, and skills. Accepts `anchors=["domain"]` or `[]` for recent continuity.
 
-**Recall tool (applies when a question touches prior work, user preferences, project state, or session-spanning context):**
-- `remember(query="…")` — returns ranked memories matching the query. An empty result signals the topic is new and general knowledge applies. Accepts `hint_anchors=["domain"]` to boost domain-tagged matches.
+**Recall tool:**
+- `remember(query="…")` — ranked memories for prior work, preferences, project state, or cross-session context. Empty result means general knowledge applies. `hint_anchors=["domain"]` boosts domain matches.
 
-**Persistence tool (applies when the user states a decision, preference, fact, project detail, or identity shift worth recalling next session):**
-- `save(content="…", category="…")` — persists a durable memory. `category` is a group ("identity", "experience", "knowledge") and substrate auto-routes. In-flight reasoning and tool-output recaps are not durable; they belong in conversational context.
+**Persistence tool:**
+- `save(content="…", category="…")` — durable memory for decisions, preferences, facts, project details, or identity shifts. `category` is a group ("identity", "experience", "knowledge"); substrate routes the type.
 
-**Continuity tool (applies at session end, when context approaches its limit, or when wrapping a logical work unit):**
-- `wrap_up(what_we_built="…", whats_next="…")` — persists a session handoff. Idempotent; safe to invoke multiple times. The next session's `load_context` call replays this handoff.
+**Counterpart update tool:**
+- `update(scope="…", changes="…")` — durable self/rule/workflow/loadout changes. Use for counterpart evolution, not ordinary memory capture.
 
-**Hint protocol:** tool responses may carry `X-Erebyx-Hint: wrap_up_recommended` or `compact_imminent` headers. These indicate substrate-detected consolidation boundaries; the natural response is a subsequent `wrap_up` call.
+**Continuity tool:**
+- `wrap_up(what_we_built="…", whats_next="…")` — session handoff for endings, compaction, or logical work-unit boundaries. Idempotent; next `load_context` replays it.
+
+**Hint protocol:** `X-Erebyx-Hint: wrap_up_recommended` or `compact_imminent` marks a consolidation boundary; `wrap_up` is the continuity response.
 "#;
 
 /// Write the rules file for a specific client.
@@ -191,6 +195,85 @@ pub fn write_dynamic_block(client: &AiClient, dynamic_content: &str) -> Result<(
     atomic_write_secret(&client.rules_path, new_content.as_bytes())?;
 
     Ok(())
+}
+
+/// Emit portable harness files from the configured counterpart.
+///
+/// These files carry the counterpart's model-agnostic operating surface across
+/// common harness conventions (SKILL.md, AGENTS.md, CLAUDE.md) without
+/// embedding secrets. Runtime credentials stay in the local owner-only
+/// credential store and MCP client configs.
+pub fn write_portable_harness_files(
+    dir: &std::path::Path,
+    credentials: &SetupCredentials,
+    dynamic_content: &str,
+) -> Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let mut written = Vec::new();
+    let skill = format!(
+        r#"# EREBYX Counterpart Skill
+
+Use this skill when reconstituting the same EREBYX counterpart through a model, CLI, SDK, or MCP host.
+
+Configuration:
+- API URL: {api_url}
+- Instance ID: {instance_id}
+- Credentials: run `erebyx login`, then `erebyx setup`; secrets are not embedded in this file.
+
+Surface:
+- `restore_identity` loads the counterpart identity and ethos.
+- `load_context` loads continuity, active loadout, and skills.
+- `remember` retrieves prior memory.
+- `save` persists durable memory.
+- `update` revises counterpart self/rules/workflows through the substrate.
+- `wrap_up` writes continuity for the next session.
+
+{dynamic}
+"#,
+        api_url = credentials.api_url,
+        instance_id = credentials.instance_id,
+        dynamic = portable_dynamic_section(dynamic_content),
+    );
+    written.push(write_portable_file(&dir.join("SKILL.md"), &skill)?);
+
+    let agents = format!(
+        r#"# EREBYX Counterpart
+
+This harness uses EREBYX as the source of identity, memory, workflow rules, and continuity.
+
+On session start, restore identity and load context from instance `{instance_id}` at `{api_url}`. Use the local `erebyx` MCP configuration generated by `erebyx setup`; do not substitute a default instance id.
+
+{dynamic}
+"#,
+        api_url = credentials.api_url,
+        instance_id = credentials.instance_id,
+        dynamic = portable_dynamic_section(dynamic_content),
+    );
+    written.push(write_portable_file(&dir.join("AGENTS.md"), &agents)?);
+    written.push(write_portable_file(&dir.join("CLAUDE.md"), &agents)?);
+    Ok(written)
+}
+
+fn write_portable_file(path: &std::path::Path, content: &str) -> Result<PathBuf> {
+    atomic_write_secret(path, content.trim().as_bytes())?;
+    Ok(path.to_path_buf())
+}
+
+fn portable_dynamic_section(dynamic_content: &str) -> String {
+    if dynamic_content.trim().is_empty() {
+        "Install-time substrate state was unavailable; call `restore_identity` and `load_context` at runtime.".to_string()
+    } else {
+        format!(
+            "Install-time substrate snapshot:\n\n{}",
+            dynamic_content.trim()
+        )
+    }
 }
 
 /// Strip a previous EREBYX:DYNAMIC:START/END block from rules-file content.

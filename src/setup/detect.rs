@@ -561,25 +561,19 @@ fn goose_yaml_has_erebyx(content: &str, server_key: &str) -> bool {
 mod detect_tests {
     use super::*;
     use std::io::Write;
+    use tempfile::Builder;
 
     /// Write `content` to a temp file with the given extension and run
     /// `has_erebyx_mcp_config` against it for `kind`.
     fn detect_in(content: &str, ext: &str, kind: &ClientKind) -> bool {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!(
-            "erebyx-detect-test-{}-{}.{}",
-            std::process::id(),
-            // cheap unique-ish suffix
-            content.len(),
-            ext
-        ));
-        {
-            let mut f = std::fs::File::create(&path).expect("create temp config");
-            f.write_all(content.as_bytes()).expect("write temp config");
-        }
-        let result = has_erebyx_mcp_config(&path, kind);
-        let _ = std::fs::remove_file(&path);
-        result
+        let mut file = Builder::new()
+            .prefix("erebyx-detect-test-")
+            .suffix(&format!(".{ext}"))
+            .tempfile()
+            .expect("create temp config");
+        file.write_all(content.as_bytes())
+            .expect("write temp config");
+        has_erebyx_mcp_config(&file.path().to_path_buf(), kind)
     }
 
     /// CLI v0.1.2 fix [9]: a bare mention of "erebyx" (a comment, a stale
